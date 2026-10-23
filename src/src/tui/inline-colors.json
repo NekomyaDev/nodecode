@@ -1,0 +1,114 @@
+{
+  "syntax": "<span style=\"color:#RRGGBB\">inline Markdown</span>",
+  "scope": "Complete, single logical line; nested color spans allowed; only six hex digits and optional ASCII spaces after color:; code and escaped openers are literal. Foreground-only. Raw HTML and terminal controls remain untrusted. Depth limit 16. Explicit span colors leave the surrounding theme/shadow policy intact.",
+  "cases": [
+    {
+      "name": "lavender",
+      "source": "<span style=\"color:#B8A1E3\">**Lavender**</span>",
+      "plain": "Lavender",
+      "html": "<p><span class=\"inline-color\" data-color=\"#B8A1E3\"><strong>Lavender</strong></span></p>"
+    },
+    {
+      "name": "ice",
+      "source": "before <span style=\"color: #9BC2E8\">Ice blue</span> after",
+      "plain": "before Ice blue after",
+      "html": "<p>before <span class=\"inline-color\" data-color=\"#9BC2E8\">Ice blue</span> after</p>"
+    },
+    {
+      "name": "sage",
+      "source": "<span style=\"color:#AFC8A1\">*Sage* and ~~old~~</span>",
+      "plain": "Sage and old",
+      "html": "<p><span class=\"inline-color\" data-color=\"#AFC8A1\"><em>Sage</em> and <del>old</del></span></p>"
+    },
+    {
+      "name": "white",
+      "source": "<span style=\"color:#c8cbd0\">`Soft white`</span>",
+      "plain": "Soft white",
+      "html": "<p><span class=\"inline-color\" data-color=\"#c8cbd0\"><code>Soft white</code></span></p>"
+    },
+    {
+      "name": "link",
+      "source": "<span style=\"color:#B8A1E3\">[λ 界](https://example.org/colors)</span>",
+      "plain": "λ 界",
+      "html": "<p><span class=\"inline-color\" data-color=\"#B8A1E3\"><a href=\"https://example.org/colors\" target=\"_blank\" rel=\"noopener noreferrer\">λ 界</a></span></p>"
+    },
+    {
+      "name": "nested",
+      "source": "<span style=\"color:#B8A1E3\">outer <span style=\"color:#9BC2E8\">**inner**</span> outer</span>",
+      "plain": "outer inner outer",
+      "html": "<p><span class=\"inline-color\" data-color=\"#B8A1E3\">outer <span class=\"inline-color\" data-color=\"#9BC2E8\"><strong>inner</strong></span> outer</span></p>"
+    },
+    {
+      "name": "inline-code",
+      "source": "`<span style=\"color:#B8A1E3\">literal</span>`",
+      "plain": "<span style=\"color:#B8A1E3\">literal</span>",
+      "html": "<p><code>&lt;span style=&quot;color:#B8A1E3&quot;&gt;literal&lt;/span&gt;</code></p>"
+    },
+    {
+      "name": "escaped",
+      "source": "\\<span style=\"color:#B8A1E3\">literal</span>",
+      "plain": "<span style=\"color:#B8A1E3\">literal</span>",
+      "html": "<p>&lt;span style=&quot;color:#B8A1E3&quot;&gt;literal&lt;/span&gt;</p>"
+    },
+    {
+      "name": "bad-hex",
+      "source": "<span style=\"color:#ZZZZZZ\">literal</span>",
+      "plain": "<span style=\"color:#ZZZZZZ\">literal</span>",
+      "html": "<p>&lt;span style=&quot;color:#ZZZZZZ&quot;&gt;literal&lt;/span&gt;</p>"
+    },
+    {
+      "name": "css-injection",
+      "source": "<span style=\"color:#B8A1E3;background:url(https://evil.test/x)\">literal</span>",
+      "plain": "<span style=\"color:#B8A1E3;background:url(https://evil.test/x)\">literal</span>",
+      "html": "<p>&lt;span style=&quot;color:#B8A1E3;background:url(<a href=\"https://evil.test/x\" target=\"_blank\" rel=\"noopener noreferrer\">https://evil.test/x</a>)&quot;&gt;literal&lt;/span&gt;</p>"
+    },
+    {
+      "name": "event-attribute",
+      "source": "<span style=\"color:#B8A1E3\" onclick=\"alert(1)\">literal</span>",
+      "plain": "<span style=\"color:#B8A1E3\" onclick=\"alert(1)\">literal</span>",
+      "html": "<p>&lt;span style=&quot;color:#B8A1E3&quot; onclick=&quot;alert(1)&quot;&gt;literal&lt;/span&gt;</p>"
+    },
+    {
+      "name": "unclosed",
+      "source": "<span style=\"color:#B8A1E3\">streaming",
+      "plain": "<span style=\"color:#B8A1E3\">streaming",
+      "html": "<p>&lt;span style=&quot;color:#B8A1E3&quot;&gt;streaming</p>"
+    },
+    {
+      "name": "empty",
+      "source": "<span style=\"color:#B8A1E3\"></span>",
+      "plain": "",
+      "html": "<p><span class=\"inline-color\" data-color=\"#B8A1E3\"></span></p>"
+    },
+    {
+      "name": "code-close",
+      "source": "<span style=\"color:#B8A1E3\">`</span>` **kept**</span>",
+      "plain": "</span> kept",
+      "html": "<p><span class=\"inline-color\" data-color=\"#B8A1E3\"><code>&lt;/span&gt;</code> <strong>kept</strong></span></p>"
+    },
+    {
+      "name": "script",
+      "source": "<span style=\"color:#B8A1E3\"><script>alert(1)</script></span>",
+      "plain": "<script>alert(1)</script>",
+      "html": "<p><span class=\"inline-color\" data-color=\"#B8A1E3\">&lt;script&gt;alert(1)&lt;/script&gt;</span></p>"
+    },
+    {
+      "name": "outer-bold",
+      "source": "**<span style=\"color:#B8A1E3\">Lavender</span>**",
+      "plain": "Lavender",
+      "html": "<p><strong><span class=\"inline-color\" data-color=\"#B8A1E3\">Lavender</span></strong></p>"
+    },
+    {
+      "name": "multi-tick-code-is-literal",
+      "source": "``<span style=\"color:#B8A1E3\">literal</span>``",
+      "plain": "`<span style=\"color:#B8A1E3\">literal</span>`",
+      "html": "<p><code>&lt;span style=&quot;color:#B8A1E3&quot;&gt;literal&lt;/span&gt;</code></p>"
+    },
+    {
+      "name": "quoted-close-does-not-close-color",
+      "source": "<span style=\"color:#B8A1E3\">``</span>`` after</span>",
+      "plain": "`</span>` after",
+      "html": "<p><span class=\"inline-color\" data-color=\"#B8A1E3\"><code>&lt;/span&gt;</code> after</span></p>"
+    }
+  ]
+}

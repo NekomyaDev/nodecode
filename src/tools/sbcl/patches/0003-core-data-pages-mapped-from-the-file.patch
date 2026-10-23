@@ -1,0 +1,110 @@
+darwin-jit maps the core's data pages from the file instead of reading them.
+
+Stock darwin-jit read()s the whole dynamic space of the core into its MAP_JIT
+reservation (load_core_bytes_jit), so every byte of the image is dirty
+anonymous memory and counts in the process's physical footprint -- 77 MB of a
+nodecode image, 22.7 of it code and 54.4 data (2026-09-25). Only code needs
+the JIT mapping. The directory now records the dynamic space instead of
+loading it; once gc_load_corefile_ptes has the page types, it reads the code
+and free pages into the JIT reservation as before and maps every other run of
+pages copy-on-write from the file, as load_core_bytes does on every other
+platform: clean until written, and a clean file page is not footprint.
+
+Nothing else changes. Those pages keep page_execp 0, which is what a data
+page from the core always had, and prepare_pages already remaps a page whose
+executable bit disagrees with the type it is about to hold -- so a freed page
+that later takes code comes back as MAP_JIT anonymous memory. Measured on the
+macOS lane with every shipped cell: the launchd gateway 101 -> 57 MB, with
+0004 and the shared TLS context 49 MB.
+
+--- a/src/runtime/coreparse.c
++++ b/src/runtime/coreparse.c
+@@ -742,6 +742,60 @@
+ lispobj* linkage_space;
+ int linkage_table_count;
+ 
++#ifdef LISP_FEATURE_DARWIN_JIT
++/* Stock darwin-jit read()s the whole dynamic space of the core into its
++ * MAP_JIT reservation, so every byte of the core is dirty anonymous memory,
++ * all of it in the process's physical footprint. Only code needs the JIT
++ * mapping. Every other page from the core is mapped copy-on-write from the
++ * file -- clean until written, as load_core_bytes maps it on every other
++ * platform -- and stays non-executable in page_execp, which is how
++ * prepare_pages already treats a page it must remap before code lands on it.
++ * Which pages hold code is known only from the page table, so the directory
++ * records the space here and gc_load_corefile_ptes loads it. */
++static struct {
++    os_vm_offset_t offset;
++    char* addr;
++    os_vm_size_t len;
++} deferred_dynamic;
++
++static void load_deferred_dynamic_space(int fd, page_index_t n_ptes)
++{
++    if (!deferred_dynamic.len) return;
++    page_index_t npages = deferred_dynamic.len / GENCGC_PAGE_BYTES;
++    if (npages > n_ptes) npages = n_ptes;
++    page_index_t start = 0;
++    while (start < npages) {
++        bool mappable = page_words_used(start) && !is_code(page_table[start].type);
++        page_index_t end = start + 1;
++        while (end < npages
++               && (page_words_used(end) && !is_code(page_table[end].type)) == mappable)
++            ++end;
++        char* addr = deferred_dynamic.addr + npage_bytes(start);
++        os_vm_size_t len = npage_bytes(end - start);
++        os_vm_offset_t offset = deferred_dynamic.offset + npage_bytes(start);
++        if (mappable) {
++            /* MAP_FIXED over a MAP_JIT range fails with EINVAL unless the
++             * range is unmapped first (remap_page_range's own note) */
++            munmap(addr, len);
++            void* actual = mmap(addr, len, PROT_READ | PROT_WRITE,
++                                MAP_PRIVATE | MAP_FIXED, fd, (off_t)offset);
++            if (actual != addr)
++                lose("mapping core pages %p..%p from the file failed: errno=%d",
++                     addr, addr + len, errno);
++        } else {
++            load_core_bytes_jit(fd, offset, (os_vm_address_t)addr, len);
++        }
++        start = end;
++    }
++    /* Past the page table's reach, as a read would have loaded it */
++    if ((os_vm_size_t)npage_bytes(npages) < deferred_dynamic.len)
++        load_core_bytes_jit(fd, deferred_dynamic.offset + npage_bytes(npages),
++                            (os_vm_address_t)(deferred_dynamic.addr + npage_bytes(npages)),
++                            deferred_dynamic.len - npage_bytes(npages));
++    deferred_dynamic.len = 0;
++}
++#endif
++
+ static void
+ process_directory(int count, struct ndir_entry *entry,
+                   __attribute__((unused)) sword_t linkage_table_data_page,
+@@ -875,7 +929,14 @@
+             }
+             else
+ #ifdef LISP_FEATURE_DARWIN_JIT
+-            if (id == DYNAMIC_CORE_SPACE_ID || id == STATIC_CODE_CORE_SPACE_ID || id == READ_ONLY_CORE_SPACE_ID) {
++            if (id == DYNAMIC_CORE_SPACE_ID) {
++                /* Loaded once the page table says which pages hold code:
++                 * load_deferred_dynamic_space */
++                deferred_dynamic.offset = offset + file_offset;
++                deferred_dynamic.addr = (char*)addr;
++                deferred_dynamic.len = len;
++            } else
++            if (id == STATIC_CODE_CORE_SPACE_ID || id == READ_ONLY_CORE_SPACE_ID) {
+                 load_core_bytes_jit(fd, offset + file_offset, (os_vm_address_t)addr, len);
+             } else
+ #endif
+@@ -1260,6 +1321,11 @@
+     generations[gen].bytes_allocated = bytes_allocated;
+     gc_assert((ssize_t)bytes_allocated <= (ssize_t)(n_ptes * GENCGC_PAGE_BYTES));
+ 
++#ifdef LISP_FEATURE_DARWIN_JIT
++    /* The page types are known now: map the data, read the code */
++    load_deferred_dynamic_space(fd, n_ptes);
++#endif
++
+     /* Record the demarcation point in permgen space between objects mapped from core
+      * and new objects so that GC can potentially treat them differently.
+      * (below it: visit only if touched, above it: always visit) */

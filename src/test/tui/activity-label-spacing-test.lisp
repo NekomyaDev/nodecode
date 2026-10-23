@@ -1,0 +1,37 @@
+;;;; activity-label-spacing-test.lisp --- Standard's compact activity-label lane.
+(in-package #:nodecode.test)
+
+(defun activity-label-text (standard developer &optional (mode nle::*tool-detail*))
+  "Expected compact title in the current viewport."
+  (if (eq mode :standard) standard developer))
+
+(deftest standard-activity-labels-align-without-a-separator ()
+  (let* ((nle::*tool-detail* :standard)
+         (nle::*color-profile* :none)
+         (nle::*expanded-tool-call* nil)
+         (note "Keep the continuation under the description column")
+         (eval (nle::make-transcript-row :kind :tool-call :tool-name "eval"
+                 :tool-args (nlk::encode-json-object (nlk:json-object "form" (format nil ";; ~a~%(+ 1 2)" note)))
+                 :tool-status "done"))
+         (think (nle::make-transcript-row :kind :reasoning :hydrated t :text note))
+         (mutate (mutate-row "receipt" note))
+         (lines (mapcar (lambda (row) (first (nle::row-llines row 38))) (list think eval mutate))))
+    (is (equal (mapcar (lambda (label) (concatenate 'string label note)) '("Think    " "Eval     " "Mutate   ")) (mapcar #'nle::lline-text lines)) "the operator's three labels have no bullet and one detail column")
+    (is (equal '(9 9 9) (mapcar #'nle::lline-hang lines)))
+    (dolist (line lines)
+      (let ((rows (nth-value 1 (nle::lline-rows line 38))))
+        (is (> (length rows) 1))
+        (is (every (lambda (row) (<= (nle::text-display-width row) 38)) rows))
+        (is (every (lambda (row) (= 12 (position-if-not (lambda (ch) (char= ch #\Space)) row))) (rest rows)) "wrapped descriptions stay under the detail, including the transcript gutter")))))
+
+(deftest activity-label-spacing-preserves-developer-and-compound-titles ()
+  (dolist (mode '(:standard :developer))
+    (let ((nle::*tool-detail* mode))
+      (dolist (label '("Eval" "Edit" "Mutate" "界" "Read 2 files"))
+        (let* ((line (nle::make-lline :text label))
+               (compact (and (eq mode :standard) (<= (nle::text-display-width label) 6)))
+               (separator (if (and compact (eq mode :standard)) " " " · "))
+               (pad (if compact (- 8 (nle::text-display-width label)) 0)))
+          (nle::append-title-detail line "description")
+          (is (equal (concatenate 'string label (make-string pad :initial-element #\Space) separator "description") (nle::lline-text line)))
+          (is (= (if compact (+ 8 (length separator)) 0) (nle::lline-hang line))))))))

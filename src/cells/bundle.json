@@ -1,0 +1,26 @@
+{
+  "git": "https://github.com/nodecode-ai/cells",
+  "commit": "780fbc5eeb65ca4c85decc6f2c3f7ff3dc324d13",
+  "cells": {
+    "board": "tools/nodecode-board",
+    "channels/discord": "rooms/nodecode-channel-discord",
+    "channels/kit": "rooms/nodecode-channel-kit",
+    "channels/slack": "rooms/nodecode-channel-slack",
+    "channels/telegram": "rooms/nodecode-channel-telegram",
+    "chrome": "tools/nodecode-chrome",
+    "context": "tools/nodecode-context",
+    "cron": "tools/nodecode-cron",
+    "cyber-security": "tools/nodecode-cyber-security",
+    "experience": "tools/nodecode-experience",
+    "goal": "tools/nodecode-goal",
+    "guard": "tools/nodecode-guard",
+    "link": "rooms/nodecode-link",
+    "mcp": "tools/nodecode-mcp",
+    "prs": "tools/nodecode-prs",
+    "qa": "tools/nodecode-qa",
+    "team": "tools/nodecode-team",
+    "template": "template",
+    "web": "rooms/nodecode-web",
+    "websearch": "tools/nodecode-websearch"
+  }
+}

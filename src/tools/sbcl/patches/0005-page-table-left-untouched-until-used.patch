@@ -1,0 +1,42 @@
+The page table is left untouched until a page is used.
+
+gc_allocate_ptes callocs the page table -- 16 bytes for every GC page of the
+dynamic space, 2 MB at a nodecode image's 8 GB -- trusting, in its own words,
+that "the C library typically implements this efficiently with mmap()". glibc
+does; macOS's medium allocator (blocks up to 8 MB) zeroes a reused block
+itself, so the whole table was resident while the heap used a few thousand
+entries: the 2 MB of MALLOC_MEDIUM a macOS gateway and shell both carried
+(2026-09-25, lane run 36190378614). On Darwin the table, the pin table and
+page_execp come from os_allocate: fresh pages read zero, which is what calloc
+promised, and stay untouched until an entry is written.
+
+--- a/src/runtime/coreparse.c	2026-09-25 13:44:22.672881717 -0700
++++ b/src/runtime/coreparse.c	2026-09-25 14:23:15.888833343 -0700
+@@ -1134,15 +1134,24 @@
+      *   index at 1+ appears to start a contiguous block even though
+      *   it corresponds to no page)
+      */
+-    page_table = calloc(page_table_pages+2, sizeof(struct page));
++#ifdef LISP_FEATURE_DARWIN
++    /* Not calloc on Darwin: its medium allocator zeroes a reused block
++     * itself, so the table -- 2 MB for an 8 GB space, of which the heap uses
++     * a few thousand entries -- was resident whole. Fresh pages read zero. */
++#define ZERO_TABLE(n, size) (void*)os_allocate(ALIGN_UP((n)*(size), os_vm_page_size))
++#else
++#define ZERO_TABLE(n, size) calloc(n, size)
++#endif
++    page_table = ZERO_TABLE(page_table_pages+2, sizeof(struct page));
+     gc_assert(page_table);
+     page_table[0].gen = 9; // an arbitrary never-used value
+     ++page_table;
+-    gc_page_pins = calloc(page_table_pages, 1);
++    gc_page_pins = ZERO_TABLE(page_table_pages, 1);
+     gc_assert(gc_page_pins);
+ #ifdef LISP_FEATURE_DARWIN_JIT
+-    page_execp = calloc(page_table_pages, 1);
++    page_execp = ZERO_TABLE(page_table_pages, 1);
+ #endif
++#undef ZERO_TABLE
+ 
+     long num_gc_cards = 1 + gc_card_table_mask;
+ #ifdef LISP_FEATURE_X86_64

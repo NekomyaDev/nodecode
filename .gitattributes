@@ -1,0 +1,5 @@
+# Lisp sources must reach every platform with LF: a format string continued
+# by ~<newline> reads as the unknown directive ~<Return> under CRLF, which is
+# how the first Windows build died in Coalton (2026-09-06).
+*.lisp text eol=lf
+*.asd text eol=lf

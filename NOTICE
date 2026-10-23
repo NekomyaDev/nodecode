@@ -1,0 +1,10 @@
+Nodecode
+Copyright 2025-2026 Nodecode AI
+
+Licensed under the MIT License — see LICENSE.
+
+Third-party attribution:
+- The terminal core (src/src/term/) and the composer editor (src/src/tui/editor.lisp)
+  are derived from cl-tuition, Anthony Green's Common Lisp port of charmbracelet's
+  bubbletea, bubbles and lipgloss (MIT). The derivation record and the full license
+  text sit in src/src/term/NOTICE.

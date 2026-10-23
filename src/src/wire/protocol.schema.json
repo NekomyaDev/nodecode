@@ -1,0 +1,551 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:nodecode:gateway-sync-protocol:1",
+  "title": "Nodecode gateway sync protocol, version 1",
+  "description": "Every frame the gateway's WebSocket (/gateway) carries, both ways, and the lines `nodecode rpc' reads and writes. The owner is protocol.lisp beside this file; a test holds the kind lists here to the code's. A socket client sends GatewayConnect after GatewayConnectChallenge, then ClientCommandFrame; `nodecode rpc' does that part itself and reads one Command a line on stdin. Toward a client every post-handshake frame is a Frame: on a socket, and one a line on `nodecode rpc''s stdout.",
+  "$defs": {
+    "MaybeString": {
+      "description": "A string, or false or null where there is none: the encoder writes an absent value as false.",
+      "anyOf": [{ "type": "string" }, { "const": false }, { "type": "null" }]
+    },
+    "Position": {
+      "description": "A log position: a fact's place in the store's log, the cursor a resume names.",
+      "type": "integer",
+      "minimum": 0
+    },
+
+    "CommandType": {
+      "description": "Every command kind (+GATEWAY-COMMAND-KINDS+).",
+      "enum": [
+        "set_session_subscriptions",
+        "start_turn",
+        "steer_turn",
+        "withdraw_prompt",
+        "cancel_turn",
+        "navigate_checkpoint",
+        "interrupt_exec",
+        "get_state"
+      ]
+    },
+    "Command": {
+      "description": "One command: a `nodecode rpc' line, or a client_command frame's command. Every kind but set_session_subscriptions has a command_id and a correlation_id on the socket; `nodecode rpc' mints the id when a line names none, the correlation the same, and fills session_id with its own session.",
+      "oneOf": [
+        { "$ref": "#/$defs/StartTurn" },
+        { "$ref": "#/$defs/SteerTurn" },
+        { "$ref": "#/$defs/WithdrawPrompt" },
+        { "$ref": "#/$defs/CancelTurn" },
+        { "$ref": "#/$defs/InterruptExec" },
+        { "$ref": "#/$defs/NavigateCheckpoint" },
+        { "$ref": "#/$defs/GetState" },
+        { "$ref": "#/$defs/SetSessionSubscriptions" }
+      ]
+    },
+    "CommandIdentity": {
+      "properties": {
+        "command_id": { "type": "string", "minLength": 1 },
+        "correlation_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "Prompt": {
+      "description": "What a turn is asked: prompt, the text alone, or content, the wire's own form, a text item first and then base64 images. `nodecode rpc' takes either; on the socket it is content.",
+      "type": "object",
+      "properties": {
+        "session_id": { "type": "string" },
+        "prompt": { "type": "string", "minLength": 1 },
+        "content": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["type", "text"],
+                "properties": { "type": { "const": "text" }, "text": { "type": "string" } }
+              },
+              {
+                "type": "object",
+                "required": ["type", "source"],
+                "properties": {
+                  "type": { "const": "image" },
+                  "source": {
+                    "type": "object",
+                    "required": ["type", "media_type", "data"],
+                    "properties": {
+                      "type": { "const": "base64" },
+                      "media_type": { "type": "string" },
+                      "data": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "anyOf": [{ "required": ["prompt"] }, { "required": ["content"] }]
+    },
+    "StartTurn": {
+      "description": "Start a turn; one already running queues it behind (result status queued).",
+      "type": "object",
+      "required": ["type", "request"],
+      "allOf": [{ "$ref": "#/$defs/CommandIdentity" }],
+      "properties": {
+        "type": { "const": "start_turn" },
+        "request": { "$ref": "#/$defs/Prompt" }
+      }
+    },
+    "SteerTurn": {
+      "description": "Steer the running turn: the prompt runs at its next round boundary.",
+      "type": "object",
+      "required": ["type", "request"],
+      "allOf": [{ "$ref": "#/$defs/CommandIdentity" }],
+      "properties": {
+        "type": { "const": "steer_turn" },
+        "request": {
+          "allOf": [{ "$ref": "#/$defs/Prompt" }],
+          "required": ["expected_turn_id"],
+          "properties": { "expected_turn_id": { "type": "string" } }
+        }
+      }
+    },
+    "WithdrawPrompt": {
+      "description": "Take a queued prompt back; the result carries its content and images.",
+      "type": "object",
+      "required": ["type", "prompt_id"],
+      "allOf": [{ "$ref": "#/$defs/CommandIdentity" }],
+      "properties": {
+        "type": { "const": "withdraw_prompt" },
+        "session_id": { "type": "string" },
+        "prompt_id": { "type": "string" }
+      }
+    },
+    "CancelTurn": {
+      "description": "Stop the running turn; retract also takes it back when it produced nothing.",
+      "type": "object",
+      "required": ["type", "turn_id"],
+      "allOf": [{ "$ref": "#/$defs/CommandIdentity" }],
+      "properties": {
+        "type": { "const": "cancel_turn" },
+        "session_id": { "type": "string" },
+        "turn_id": { "type": "string" },
+        "retract": { "type": "boolean" }
+      }
+    },
+    "InterruptExec": {
+      "description": "Stop a background evaluation of the session.",
+      "type": "object",
+      "required": ["type", "exec_id"],
+      "allOf": [{ "$ref": "#/$defs/CommandIdentity" }],
+      "properties": {
+        "type": { "const": "interrupt_exec" },
+        "session_id": { "type": "string" },
+        "exec_id": { "type": "integer" }
+      }
+    },
+    "NavigateCheckpoint": {
+      "description": "Move the session's head: to a turn, or one step with direction undo or redo. Every attached client is then sent session_resync_required and subscribes again.",
+      "type": "object",
+      "required": ["type"],
+      "allOf": [{ "$ref": "#/$defs/CommandIdentity" }],
+      "properties": {
+        "type": { "const": "navigate_checkpoint" },
+        "session_id": { "type": "string" },
+        "target_turn_id": { "type": "string" },
+        "checkpoint_id": { "type": "string" },
+        "boundary": { "enum": ["turn", "user_message"] },
+        "direction": { "enum": ["undo", "redo"] },
+        "restore_files": { "type": "boolean" }
+      }
+    },
+    "GetState": {
+      "description": "Read the session as it stands: the result's response is a SessionState. Needs no subscription.",
+      "type": "object",
+      "required": ["type"],
+      "allOf": [{ "$ref": "#/$defs/CommandIdentity" }],
+      "properties": {
+        "type": { "const": "get_state" },
+        "session_id": { "type": "string" }
+      }
+    },
+    "SetSessionSubscriptions": {
+      "description": "The sessions this client follows, replacing the ones before. Each is sent its replay (session_stream_resumed), then its frames as they land. An entry with a cursor, the newest one the client read, is resumed: the replay carries only the facts past it and says resumed_after, unless the session's head moved since or the cursor is past its log, when the whole replay comes. live_only gets no replay; rows gets session_rows instead of facts.",
+      "type": "object",
+      "required": ["type", "subscriptions"],
+      "properties": {
+        "type": { "const": "set_session_subscriptions" },
+        "pid": { "type": "integer" },
+        "subscriptions": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              { "type": "string" },
+              {
+                "type": "object",
+                "required": ["session_id"],
+                "properties": {
+                  "session_id": { "type": "string" },
+                  "cursor": { "$ref": "#/$defs/Position" },
+                  "live_only": { "type": "boolean" },
+                  "rows": { "type": "boolean" }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+
+    "ClientCommandFrame": {
+      "type": "object",
+      "required": ["type", "command"],
+      "properties": {
+        "type": { "const": "client_command" },
+        "command": {
+          "allOf": [{ "$ref": "#/$defs/Command" }],
+          "if": { "properties": { "type": { "not": { "const": "set_session_subscriptions" } } } },
+          "then": { "required": ["command_id", "correlation_id"] }
+        }
+      }
+    },
+    "ProtocolRange": {
+      "required": ["protocol_min", "protocol_max"],
+      "properties": {
+        "protocol_min": { "type": "integer" },
+        "protocol_max": { "type": "integer" }
+      }
+    },
+    "GatewayConnectChallenge": {
+      "type": "object",
+      "required": ["type", "challenge_nonce"],
+      "allOf": [{ "$ref": "#/$defs/ProtocolRange" }],
+      "properties": {
+        "type": { "const": "gateway_connect_challenge" },
+        "challenge_nonce": { "type": "string" }
+      }
+    },
+    "GatewayConnect": {
+      "type": "object",
+      "required": ["type", "challenge_nonce", "client", "requested_scopes"],
+      "allOf": [{ "$ref": "#/$defs/ProtocolRange" }],
+      "properties": {
+        "type": { "const": "gateway_connect" },
+        "challenge_nonce": { "type": "string" },
+        "client": {
+          "type": "object",
+          "required": ["id", "version", "mode", "platform", "instance_id"],
+          "additionalProperties": { "type": "string" }
+        },
+        "auth": {
+          "type": "object",
+          "properties": { "operator_token": { "type": "string" } }
+        },
+        "requested_scopes": { "type": "array", "items": { "enum": ["sync.read", "sync.write"] } },
+        "transport": { "type": "object" }
+      }
+    },
+    "GatewayConnectAck": {
+      "type": "object",
+      "required": ["type", "protocol_version", "accepted_scopes"],
+      "properties": {
+        "type": { "const": "gateway_connect_ack" },
+        "protocol_version": { "const": 1 },
+        "accepted_scopes": { "type": "array", "items": { "type": "string" } },
+        "version": { "type": "string" }
+      }
+    },
+    "GatewayConnectRejected": {
+      "type": "object",
+      "required": ["type", "reason", "message"],
+      "allOf": [{ "$ref": "#/$defs/ProtocolRange" }],
+      "properties": {
+        "type": { "const": "gateway_connect_rejected" },
+        "reason": { "type": "string" },
+        "message": { "type": "string" },
+        "permanent": { "type": "boolean" }
+      }
+    },
+
+    "Frame": {
+      "description": "Every frame toward a client past the handshake. sequence is dense per client and session; 0 is a frame outside sequencing (a command's result, a refusal, the organism's own). cursor, on a durable fact and on a replay's final chunk, is the log position a resume names; durable marks a logged fact.",
+      "type": "object",
+      "required": ["sequence", "payload"],
+      "properties": {
+        "sequence": { "type": "integer", "minimum": 0 },
+        "session_id": { "type": "string" },
+        "cursor": { "$ref": "#/$defs/Position" },
+        "durable": { "type": "boolean" },
+        "payload": { "$ref": "#/$defs/Payload" }
+      }
+    },
+    "Payload": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "description": "+SESSION-FRAME-KINDS+, then the session-less +UNSEQUENCED-FRAME-KINDS+. turn_started, turn_completed, turn_failed and turn_cancelled are a foreign gateway's; this one nests facts in session_stream_event.",
+          "enum": [
+            "session_stream_event",
+            "session_stream_resumed",
+            "session_checkpoint_undo_applied",
+            "session_resync_required",
+            "sync_protocol_error",
+            "gateway_turn_command_result",
+            "session_background_process_updated",
+            "session_input_queue_snapshot_updated",
+            "session_rows",
+            "turn_started",
+            "turn_completed",
+            "turn_failed",
+            "turn_cancelled",
+            "item_delta",
+            "organism.notice",
+            "organism.notices",
+            "organism.activity",
+            "organism.loaded",
+            "organism.upgraded",
+            "organism.note",
+            "organism.cells",
+            "model_changed",
+            "session_titled",
+            "commands_changed"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "session_stream_resumed" } } },
+          "then": {
+            "description": "A subscription's replay, in chunks; the final chunk has replay_chunk_final and the cursor. A whole replay replaces what the client folded; resumed_after marks a resume, whose facts are only those past it, folded onto what the client holds. replay_tail marks a long session's first pass, its newest turns, which the whole replay follows.",
+            "required": ["session_id", "accumulated_frames", "admission_state"],
+            "properties": {
+              "session_id": { "type": "string" },
+              "accumulated_frames": { "type": "array", "items": { "$ref": "#/$defs/AccumulatedFrame" } },
+              "admission_state": { "enum": ["ready", "active"] },
+              "replay_chunk_index": { "type": "integer", "minimum": 0 },
+              "replay_chunk_final": { "const": true },
+              "replay_tail": { "const": true },
+              "resumed_after": { "$ref": "#/$defs/Position" },
+              "title": { "type": "string", "minLength": 1, "description": "The session's name as the replay finds it (the newest session.title, else its first prompt's line); absent before the first prompt." }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "session_stream_event" } } },
+          "then": {
+            "description": "One durable fact as it lands. A turn ends with turn.completed, turn.failed or turn.cancelled.",
+            "required": ["frame"],
+            "properties": { "frame": { "$ref": "#/$defs/AccumulatedFrame" } }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "gateway_turn_command_result" } } },
+          "then": { "required": ["result"], "properties": { "result": { "$ref": "#/$defs/CommandResult" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "sync_protocol_error" } } },
+          "then": {
+            "description": "A frame or line refused. permanent: the gateway drops this client next.",
+            "required": ["code", "message", "permanent"],
+            "properties": {
+              "code": { "type": "string" },
+              "message": { "type": "string" },
+              "permanent": { "type": "boolean" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "item_delta" } } },
+          "then": {
+            "description": "Live-only: what the round in flight streams before the fact that closes it lands. text and reasoning append to the row; tool_call upserts by index; stream_reset voids what the client buffered of the round (a retry, or a resume, which then sends each row whole so far); fallback says the round moved to another model.",
+            "required": ["turn_id", "delta"],
+            "properties": {
+              "turn_id": { "type": "string" },
+              "delta": {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "enum": ["text", "reasoning", "tool_call", "stream_reset", "fallback"] },
+                  "text": { "type": "string" },
+                  "index": { "type": "integer" },
+                  "name": { "type": "string" },
+                  "arguments": { "type": "string" },
+                  "retry": {
+                    "description": "On a stream_reset: the retry it announces. attempt of limit is the failing budget's; the retry is sent delay_seconds after the frame (a replay sends what is left of it); continuation when it carries the cut attempt's output back; status, provider and reason say why, reason being the provider's own words.",
+                    "type": "object",
+                    "properties": {
+                      "attempt": { "type": "integer" },
+                      "limit": { "type": "integer" },
+                      "delay_seconds": { "type": "number" },
+                      "continuation": { "type": "boolean" },
+                      "status": { "type": "integer" },
+                      "provider": { "type": "string" },
+                      "reason": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "session_checkpoint_undo_applied" } } },
+          "then": {
+            "required": ["session_id", "target_turn_id", "previous_turn_id", "reason", "boundary"],
+            "properties": {
+              "session_id": { "type": "string" },
+              "target_turn_id": { "type": "string" },
+              "previous_turn_id": { "type": "string" },
+              "reason": { "type": "string" },
+              "boundary": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "session_resync_required" } } },
+          "then": {
+            "description": "The session's history changed under the client: subscribe again, with no cursor.",
+            "required": ["session_id"],
+            "properties": { "session_id": { "type": "string" } }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "enum": ["organism.notice", "organism.note"] } } },
+          "then": {
+            "required": ["text"],
+            "properties": {
+              "text": { "type": "string" },
+              "level": { "type": "string" },
+              "key": { "type": "string" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "organism.notices" } } },
+          "then": {
+            "required": ["notices"],
+            "properties": {
+              "notices": {
+                "type": "array",
+                "items": { "type": "object", "required": ["key", "text", "level"],
+                           "properties": { "key": { "type": "string" }, "text": { "type": "string" },
+                                           "level": { "type": "string" } } }
+              }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "organism.activity" } } },
+          "then": { "required": ["sessions"], "properties": { "sessions": { "type": "array" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "organism.cells" } } },
+          "then": { "required": ["names"], "properties": { "names": { "type": "array" } } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "organism.loaded" } } },
+          "then": {
+            "required": ["path", "definitions"],
+            "properties": {
+              "path": { "type": "string" },
+              "definitions": { "type": "array" },
+              "turn_id": { "type": "string", "minLength": 1 },
+              "call_id": { "type": "string", "minLength": 1 },
+              "comment": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      ]
+    },
+    "AccumulatedFrame": {
+      "description": "One durable fact: seq is its log position.",
+      "type": "object",
+      "required": ["seq", "session_id", "event"],
+      "properties": {
+        "seq": { "$ref": "#/$defs/Position" },
+        "session_id": { "type": "string" },
+        "turn_id": { "$ref": "#/$defs/MaybeString" },
+        "event": { "$ref": "#/$defs/Event" }
+      }
+    },
+    "Event": {
+      "description": "The fact: its kind (turn.started, turn.assistant_message_completed, turn.completed, ...), its payload as the log keeps it, and its envelope. turn.started's metadata carries the command_id of the start_turn that admitted it.",
+      "type": "object",
+      "required": ["type", "payload"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "payload": { "type": "object" },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "event_id": { "type": "string" },
+            "log_position": { "$ref": "#/$defs/Position" },
+            "turn_id": { "$ref": "#/$defs/MaybeString" },
+            "command_id": { "$ref": "#/$defs/MaybeString" },
+            "occurred_at": { "type": "string" }
+          }
+        }
+      }
+    },
+    "CommandResult": {
+      "description": "A command's answer, to the client that sent it alone, by its command_id.",
+      "type": "object",
+      "required": ["command_id", "correlation_id", "session_id", "command", "status", "message"],
+      "properties": {
+        "command_id": { "type": "string" },
+        "correlation_id": { "type": "string" },
+        "session_id": { "type": "string" },
+        "command": { "$ref": "#/$defs/CommandType" },
+        "status": { "enum": ["accepted", "queued", "rejected"] },
+        "code": { "type": "string" },
+        "message": { "type": "string" },
+        "message_id": { "type": "string" },
+        "sequence": { "type": "integer" },
+        "response": {
+          "type": "object",
+          "properties": {
+            "turn_id": { "type": "string" },
+            "queue_depth": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "if": {
+        "required": ["command", "status"],
+        "properties": { "command": { "const": "get_state" }, "status": { "const": "accepted" } }
+      },
+      "then": { "required": ["response"], "properties": { "response": { "$ref": "#/$defs/SessionState" } } }
+    },
+    "SessionState": {
+      "description": "get_state's answer. turn_id is the running turn's, absent when none runs; cursor is the newest log position, the one a resume names.",
+      "type": "object",
+      "required": ["queue_depth", "session", "title", "admission_state", "cursor", "target", "pending_prompts"],
+      "properties": {
+        "turn_id": { "type": "string" },
+        "queue_depth": { "type": "integer", "minimum": 0 },
+        "session": {
+          "type": "object",
+          "required": ["session_id", "cwd"],
+          "properties": {
+            "session_id": { "type": "string" },
+            "cwd": { "type": "string" },
+            "parent": { "$ref": "#/$defs/MaybeString" },
+            "created_at": { "$ref": "#/$defs/MaybeString" },
+            "standby": { "type": "boolean" }
+          }
+        },
+        "title": { "$ref": "#/$defs/MaybeString" },
+        "admission_state": { "enum": ["ready", "active"] },
+        "cursor": { "$ref": "#/$defs/Position" },
+        "target": {
+          "type": "object",
+          "required": ["provider", "model"],
+          "properties": {
+            "provider": { "$ref": "#/$defs/MaybeString" },
+            "model": { "$ref": "#/$defs/MaybeString" },
+            "effort": { "$ref": "#/$defs/MaybeString" },
+            "efforts": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "pending_prompts": { "type": "array" }
+      }
+    }
+  }
+}

@@ -1,0 +1,104 @@
+The control stack scrub gives whole pages back instead of writing them.
+
+Every thread a collection stops scrubs its control stack from its SP to the
+guard page. Where the stack grows up (arm64: every Apple Silicon Mac) that is
+memset(sp, 0, end - sp), so after the first collection each live thread holds
+its whole control stack resident however little of it the thread ever used:
+a macOS gateway with 18 threads on 8 MB stacks carried 142 MB of zeros
+(2026-09-24). A reused thread struct's stack was zeroed whole the same way.
+
+ZERO_CONTROL_STACK_RANGE writes the partial pages at either end and hands the
+whole pages between back to the OS, which reads them as zeros when next
+touched -- MADV_DONTNEED on Linux, a fresh mapping in place on Darwin (the
+thread struct space is an ordinary read-write mapping there, never MAP_JIT).
+What a reader of the range sees is unchanged; only residency is. The scrub
+uses it only while the guard page is protected: otherwise the return guard
+page in the range is protected, and touching it is what re-arms the guard.
+
+diff --color -ru a/src/runtime/alloc.c b/src/runtime/alloc.c
+--- a/src/runtime/alloc.c	2026-09-24 11:30:54.497939597 -0700
++++ b/src/runtime/alloc.c	2026-09-24 11:30:54.519274186 -0700
+@@ -680,9 +680,12 @@
+      * it's a lame algorithm and only mostly right - it stops after (1<<12) words
+      * and checks if the next is nonzero, looping again if it isn't.
+      * There's no reason not to be exactly right here instead of probably right */
+-        memset((char*)th->control_stack_start, 0,
+-               // take off 2 pages because of the soft and hard guard pages
+-               thread_control_stack_size - 2*os_vm_page_size);
++        // take off 2 pages because of the soft and hard guard pages; the
++        // return guard page below them may be protected, so it is written
++        char* return_guard = (char*)th->control_stack_start
++                             + thread_control_stack_size - 3*os_vm_page_size;
++        zero_control_stack_range((char*)th->control_stack_start, return_guard);
++        memset(return_guard, 0, os_vm_page_size);
+ #else
+     /* This is a little wasteful of cycles to pre-zero the pthread overhead (which in glibc
+      * resides at the highest stack addresses) comprising about 5kb, below which is the lisp
+diff --color -ru a/src/runtime/gc-common.c b/src/runtime/gc-common.c
+--- a/src/runtime/gc-common.c	2026-09-24 11:30:54.496093009 -0700
++++ b/src/runtime/gc-common.c	2026-09-24 11:30:54.519085699 -0700
+@@ -2358,7 +2358,13 @@
+         }
+     }
+     gc_assert(sp <= end);
+-    memset(sp, 0, end - sp);
++    /* With the guard page protected, nothing in [sp, end) is protected, and
++     * zero_control_stack_range may give its whole pages back rather than
++     * write them. Otherwise the return guard page in it must be touched. */
++    if (th->state_word.control_stack_guard_page_protected)
++        zero_control_stack_range(sp, end);
++    else
++        memset(sp, 0, end - sp);
+ #endif
+ #endif /* LISP_FEATURE_C_STACK_IS_CONTROL_STACK */
+ }
+@@ -2818,6 +2824,38 @@
+ _Atomic(char) *page_execp;
+ #include "sys_mmap.inc"
+ #include <errno.h>
++
++/* Zero [FROM, TO) of an unprotected control stack range. The partial pages at
++ * either end are written; the whole pages between are handed back to the OS,
++ * which reads them as zeros when next touched -- all a scrub promises. A
++ * memset of the whole span leaves every page of it resident: on a target
++ * whose stack grows up, every thread stopped for a collection scrubs from its
++ * SP to the guard page, so each live thread ends up holding its entire
++ * control stack however little of it the thread ever used. */
++void zero_control_stack_range(char* from, char* to)
++{
++    char* first = PTR_ALIGN_UP(from, os_vm_page_size);
++    char* last = PTR_ALIGN_DOWN(to, os_vm_page_size);
++    if (first >= last) {
++        memset(from, 0, to - from);
++        return;
++    }
++    memset(from, 0, first - from);
++#if defined LISP_FEATURE_LINUX
++    /* private anonymous memory: the next touch of each page reads zeros */
++    if (madvise(first, last - first, MADV_DONTNEED) != 0)
++        memset(first, 0, last - first);
++#elif defined LISP_FEATURE_DARWIN
++    /* a fresh mapping in place, as zero_range_with_mmap does for the heap */
++    if (sbcl_mmap(first, last - first, PROT_READ|PROT_WRITE,
++                  MAP_ANON|MAP_PRIVATE|MAP_FIXED|MAP_NORESERVE, -1, 0) != first)
++        lose("zero_control_stack_range: remap of %p..%p failed, errno=%d",
++             first, last, errno);
++#else
++    memset(first, 0, last - first);
++#endif
++    memset(last, 0, to - last);
++}
+ /* darwin-jit has another reason to remap besides just zeroing, namely,
+  * changing betwee RWX|JIT and RW-, so we don't ever want to call
+  * zero_range_with_mmap because among other things it doesn't know
+diff --color -ru a/src/runtime/thread.h b/src/runtime/thread.h
+--- a/src/runtime/thread.h	2026-09-24 11:30:54.499656469 -0700
++++ b/src/runtime/thread.h	2026-09-24 11:30:54.519173706 -0700
+@@ -356,6 +356,7 @@
+ extern void scrub_control_stack(void);
+ extern void scrub_control_stacks(void);
+ extern void scrub_thread_control_stack(struct thread *);
++extern void zero_control_stack_range(char* from, char* to);
+ extern void scavenge_control_stack(struct thread *th);
+ extern void gc_close_thread_regions(struct thread*, int);
+ 

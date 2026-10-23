@@ -1,0 +1,121 @@
+.depgraph*
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
+/.local/
+tooling/
+scripts/
+
+# Rebuildable TypeScript SDK generated modules. Gateway OpenAPI and protocol
+# JSON snapshots are the checked-in authorities; package scripts materialize
+# these local TypeScript projections before build and typecheck.
+
+# Temporary files
+tmp/
+temp/
+
+.db/
+.claude
+.ccguard.config.json
+.tmp_git_root/
+
+# Local database directory
+/db/
+TODO
+repomix-output.xml
+docs_site
+.gemini/commands/agents
+.qwen/commands/BMad
+bmad.bak.3
+bmad.bak.4
+bmad
+.agents/commands
+
+# CodeQL
+db-rust/
+db-rust-new/
+codeql-results/*.bqrs
+codeql-results/*.sarif
+codeql-results
+codeql-scripts
+codeql-queries
+.semgrep
+.bmad
+docs/bug-detective/investigation-INV-2025-001-status.md
+!vendor/ai-sdk-rs/docs/
+!vendor/ai-sdk-rs/docs/**
+/nodecode
+/nodecode-launcher
+perf.data
+perf.data.old
+nc.perf.data*
+.dirty-arch-metrics
+AGENTS.md
+.beads
+.beads
+__pycache__/
+node_modules
+bazel-*
+buck-out/
+/.pi/
+/.tmp/
+/Rust
+/goo.txt
+/recording.mp4
+/.prompts
+/artifacts/qa/rust
+.desloppify/
+/.opencode/opencode.json
+/https:/
+.cache/
+.lake/
+worklog/
+testing/
+
+/.nodecode
+/src/.nodecode/workspace_snapshots
+*.pid
+
+# every shipped cell: its source is nodecode-ai/cells, laid down here by
+# src/tools/pull-cells.sh at the pin in src/cells/bundle.json
+/src/cells/*/
+
+# Internal notes and agent rules are kept outside the repository; a checkout
+# may carry symlinks to them, never the files.
+/worklog
+/docs/issues
+/AGENTS.md
+/CLAUDE.md
+/ONBOARD.md
+/local.just
+/src/NORTH.md
+/src/PLAN.md

@@ -1,0 +1,369 @@
+;;;; account-login-test.lisp --- the browser sign-in, the machine link and the account's meter.
+;;;; SPDX-License-Identifier: MIT
+(in-package #:nodecode.test)
+
+(defparameter +account-claim+
+  "{\"request\":\"00000000-0000-0000-0000-000000000001\",\"poll\":\"poll-secret-fixture\",\"code\":\"DDAN-UY56\",\"confirm\":\"https://nodecode.ai/account/machines\",\"expires_in\":10,\"every\":2}")
+(defparameter +account-signin-claim+
+  "{\"request\":\"00000000-0000-0000-0000-000000000002\",\"poll\":\"poll-secret-fixture\",\"code\":\"SZ3G-WVYL\",\"confirm\":\"https://nodecode.ai/cli?code=SZ3G-WVYL&mode=subscription\",\"expires_in\":600,\"every\":2}")
+(defparameter +account-linked+
+  "{\"state\":\"linked\",\"name\":\"Fixture machine\",\"base_url\":\"https://api.nodecode.ai/v1\",\"api_key\":\"machine-key-fixture\",\"provider\":\"nodecode\",\"model\":null,\"address\":null}")
+(defparameter +account-usage-plan+
+  "{\"object\":\"usage\",\"plan\":{\"name\":\"founders\",\"requests\":42000,\"used\":812.4,\"left\":41187.6,\"resets_at\":\"2026-11-03T00:00:00Z\",\"threads\":4,\"running\":1},\"balance\":[{\"currency\":\"eur\",\"micros\":12400000}],\"pays\":\"plan\"}")
+(defparameter +account-usage-credit+
+  "{\"object\":\"usage\",\"plan\":null,\"balance\":[{\"currency\":\"usd\",\"micros\":0},{\"currency\":\"eur\",\"micros\":12400000}],\"pays\":\"balance\"}")
+(defparameter +account-usage-empty+
+  "{\"object\":\"usage\",\"plan\":null,\"balance\":[],\"pays\":\"none\"}")
+(defparameter +account-models+
+  "{\"object\":\"list\",\"data\":[{\"id\":\"image-v1\",\"kind\":\"image\"},{\"id\":\"cyber-v1\",\"kind\":\"chat\"},{\"id\":\"decide-v1\",\"kind\":\"chat\"}]}")
+
+(deftest account-login-launch-is-a-browser-sign-in-and-machine-link-takes-the-code ()
+  (is (equal '(nil (:login nil) nil nil nil nil nil) (launch-plan "login")))
+  (is (equal '(nil (:login "subscription") nil nil nil nil nil) (launch-plan "login" "--subscription")))
+  (is (equal '(nil (:login "api") nil nil nil nil nil) (launch-plan "login" "--api")))
+  (is (equal '(nil (:machine-link nil) nil nil nil nil nil) (launch-plan "machine" "link")))
+  (is (equal '(nil (:machine-link "DDAN-UY56") nil nil nil nil nil) (launch-plan "machine" "link" "DDAN-UY56")))
+  (is (equal "coder" (seventh (launch-plan "machine" "link" "DDAN-UY56" "-p" "coder"))))
+  (is (equal '(:help "login") (second (launch-plan "login" "--help"))))
+  (is (null (nle::terminal-refusal '(:login "api") nil '("login" "--api"))))
+  (is (null (nle::terminal-refusal '(:machine-link "DDAN-UY56") nil '("machine" "link" "DDAN-UY56"))))
+  (is (search "--subscription" (nle::launch-help-text "login")))
+  (is (search "link [CODE]" (nle::launch-help-text "machine")))
+  (is (search "login is a command of its own" (launch-refusal "--ephemeral" "login")))
+  (is (search "machine link is a command of its own" (launch-refusal "--ephemeral" "machine" "link")))
+  (is (search "nodecode machine link DDAN-UY56" (launch-refusal "login" "DDAN-UY56")))
+  (is (search "machine takes one verb" (launch-refusal "machine")))
+  (is (search "machine link takes at most one CODE" (launch-refusal "machine" "link" "DDAN-UY56" "extra"))))
+
+(deftest account-login-page-and-machine-first-save-only-after-approval ()
+  (dolist (code '(nil "DDAN-UY56"))
+    (with-temp-file (nle::*auth-file-path*)
+      (with-temp-file (nle::*shared-config-path* :contents (format nil "{~% // keep this~% \"general\":{\"theme\":\"dark\"}, \"providers\":{\"other\":{\"api_key\":\"keep-me\"}}~%}"))
+        (let ((calls '()) (time 0) (polls 0) (out (make-string-output-stream)))
+          (nle::account-login code :output out :clock (lambda () time)
+            :wait (lambda (seconds) (incf time seconds))
+            :open (lambda (url) (error "a machine link opens no browser: ~a" url))
+            :request (nlk:lambda-ignoring (method path body poll timeout)
+                       (push (list method path body poll) calls)
+                       (case method
+                         (:post (is (equal code (nlk:json-value body :string "code")))
+                                (is (null (nlk:json-value body :string "login")) "a machine link names no sign-in mode"))
+                         (:get (is (not (probe-file nle::*auth-file-path*)) "no secret saved while waiting")))
+                       (values (shasht:read-json
+                                (if (eq method :post) +account-claim+
+                                    (if (= 1 (incf polls)) "{\"state\":\"waiting\"}" +account-linked+))) 200)))
+          (is (= 3 (length calls)))
+          (is (equal "poll-secret-fixture" (fourth (first calls))))
+          (let ((text (get-output-stream-string out)))
+            (is-carrying text "DDAN-UY56" "https://nodecode.ai/account/machines" "Linked" "With /link on in nodecode, the Machines page shows its address"
+              (:absent "machine-key-fixture") (:absent "poll-secret-fixture")))
+          (is (equal "machine-key-fixture" (nlk:json-value (nle::read-auth-file nle::*auth-file-path*) :string "api_keys" "nodecode" "key")))
+          (is (equal "00000000-0000-0000-0000-000000000001" (nlk:json-value (nle::read-auth-file nle::*auth-file-path*) :string "machine_link" "request")))
+          (is (equal "poll-secret-fixture" (nlk:json-value (nle::read-auth-file nle::*auth-file-path*) :string "machine_link" "poll")))
+          (let ((text (uiop:read-file-string nle::*shared-config-path*)))
+            (is-carrying text "// keep this" "keep-me"))
+          (is (equal "https://api.nodecode.ai/v1" (nlk:json-value (nle::read-shared-config) :string "providers" "nodecode" "base_url")))
+          (is (equal "openai-completions" (nlk:json-value (nle::read-shared-config) :string "providers" "nodecode" "sdk")))
+          (is (equal "openai-completions" (nle::configured-provider-lane "nodecode"))))))))
+
+(deftest account-machine-update-reports-with-the-link-secret ()
+  (with-temp-file (nle::*auth-file-path*)
+    (with-temp-file (nle::*shared-config-path*)
+      (let ((calls '()) (out (make-string-output-stream)))
+        (is (null (nle:machine-update (nlk:json-object "relay" "archlinux-6c9yih")
+                                      :request (lambda (&rest args) (push args calls) (error "no link, no request")))))
+        (nle::account-login "DDAN-UY56" :output out :clock (lambda () 0) :wait (lambda (seconds) seconds)
+          :request (nlk:lambda-ignoring (method path body poll timeout)
+                     (values (shasht:read-json (if (eq method :post) +account-claim+ +account-linked+)) 200)))
+        (is (equal "https://archlinux-6c9yih.nodecode.ai"
+                   (nlk:json-value
+                    (nle:machine-update (nlk:json-object "relay" "archlinux-6c9yih")
+                      :request (nlk:lambda-ignoring (method path body poll timeout)
+                                 (push (list method path (nlk:json-value body :string "relay") poll) calls)
+                                 (values (shasht:read-json "{\"name\":\"Fixture machine\",\"address\":\"https://archlinux-6c9yih.nodecode.ai\"}") 200)))
+                    :string "address")))
+        (is (equal '((:post "/api/link/00000000-0000-0000-0000-000000000001" "archlinux-6c9yih" "poll-secret-fixture"))
+                   calls))
+        (is (search "wrong secret"
+                    (handler-case (nle:machine-update (nlk:json-object "relay" :null)
+                                    :request (nlk:lambda-ignoring (method path body poll timeout)
+                                               (values (shasht:read-json "{\"error\":\"wrong secret\"}") 401)))
+                      (error (e) (princ-to-string e)))))))))
+
+(deftest account-login-signs-in-in-the-browser-and-prints-the-meter ()
+  (dolist (opened '(t :no-opener))
+    (with-temp-file (nle::*auth-file-path*)
+      (with-temp-file (nle::*shared-config-path*)
+        (let ((time 0) (polls 0) (shown '()) (asked '()) (out (make-string-output-stream)))
+          (is (equal "Fixture machine"
+                     (nle::account-login nil :mode "subscription" :output out :clock (lambda () time)
+                       :wait (lambda (seconds) (incf time seconds))
+                       :open (lambda (url) (push url shown) opened)
+                       :usage-request (lambda (url key timeout)
+                                        (declare (ignore timeout))
+                                        (push (list url key) asked)
+                                        (values (shasht:read-json (if (search "/models" url) +account-models+ +account-usage-plan+))
+                                                200))
+                       :request (nlk:lambda-ignoring (method path body poll timeout)
+                                  (when (eq method :post)
+                                    (is (equal "subscription" (nlk:json-value body :string "login")))
+                                    (is (eq :null (gethash "code" body))))
+                                  (values (shasht:read-json
+                                           (if (eq method :post) +account-signin-claim+
+                                               (if (= 1 (incf polls)) "{\"state\":\"waiting\"}" +account-linked+)))
+                                          200)))))
+          (is (equal '("https://nodecode.ai/cli?code=SZ3G-WVYL&mode=subscription") shown))
+          ;; The listing first: no model was chosen, so the sign-in makes the gate's lead chat
+          ;; model the default (a buyer met `run /setup to add a model', checkout audit 2026-10-22).
+          (is (equal '(("https://api.nodecode.ai/v1/usage" "machine-key-fixture")
+                       ("https://api.nodecode.ai/v1/models" "machine-key-fixture"))
+                     asked))
+          (is (equal '("nodecode" "cyber-v1") (subseq (multiple-value-list (nle::shared-model-pin)) 0 2)))
+          (let ((text (get-output-stream-string out)))
+            (is-carrying text "https://nodecode.ai/cli?code=SZ3G-WVYL&mode=subscription" "SZ3G-WVYL"
+              (if (eq opened t) "Your browser is open" "on this machine or any other")
+              "Sign in with your nodecode.ai account"
+              "Signed in on Fixture machine" "Founders plan: 41,187 of 42,000 requests left, resets Nov 3"
+              "1 of 4 running" "API credit: €12.40" "Paying with: the plan"
+              "Default model: nodecode cyber-v1. Run nodecode to start."
+              (:absent "Foresight Lab") (:absent "/models to choose")
+              (:absent "machine-key-fixture") (:absent "poll-secret-fixture") (:absent "subscribe at")))
+          (is (equal "machine-key-fixture" (nlk:json-value (nle::read-auth-file nle::*auth-file-path*) :string "api_keys" "nodecode" "key"))))))))
+
+(deftest account-login-says-what-the-chosen-mode-still-lacks ()
+  (dolist (case `(("subscription" ,+account-usage-empty+ "subscribe at https://nodecode.ai/pricing")
+                  ("api" ,+account-usage-empty+ "add some at https://nodecode.ai/account/top-up")
+                  ("api" ,+account-usage-credit+ nil)))
+    (destructuring-bind (mode usage hint) case
+      (let ((out (make-string-output-stream)))
+        (nle::account-print-usage out mode "k" "https://api.nodecode.ai/v1"
+                                  (lambda (&rest args) (declare (ignore args)) (values (shasht:read-json usage) 200)))
+        (let ((text (get-output-stream-string out)))
+          (if hint
+              (is (search hint text))
+              (is-carrying text "API credit: €12.40" "Paying with: API credit" (:absent "add some")))
+          (is (search "/models" text)))))))
+
+(deftest account-login-asks-the-mode-or-refuses-without-a-terminal ()
+  (is (equal "api" (nle::account-ask-mode :ask (constantly "2"))))
+  (is (equal "subscription" (nle::account-ask-mode :ask (constantly " subscription "))))
+  (is (search "--subscription" (refusal-text error (nle::account-ask-mode :ask (constantly nil)))))
+  (is (search "takes 1" (refusal-text error (nle::account-ask-mode :ask (constantly "3")))))
+  (is (null (nle::account-mode-word "bogus"))))
+
+(deftest account-login-terminal-verdicts-save-nothing ()
+  (dolist (state '("refused" "expired" "gone" "unknown"))
+    (with-temp-file (nle::*auth-file-path*)
+      (with-temp-file (nle::*shared-config-path*)
+        (let ((message (refusal-text error
+                           (nle::account-login "DDAN-UY56" :output (make-broadcast-stream)
+                             :wait (constantly nil)
+                             :request (nlk:lambda-ignoring (method path body poll timeout)
+                                        (values (shasht:read-json
+                                                 (if (eq method :post) +account-claim+
+                                                     (format nil "{\"state\":\"~a\"}" state))) 200))))))
+          (is (search (cond ((equal state "gone") "already collected")
+                           ((equal state "unknown") "invalid")
+                           (t state)) message))
+          (when (member state '("expired" "gone") :test #'equal)
+            (is (search "nodecode machine link" message)))
+          (is (not (probe-file nle::*auth-file-path*)))
+          (is (not (probe-file nle::*shared-config-path*))))))))
+
+(deftest account-login-polls-stop-at-the-server-deadline (with-temp-file (nle::*auth-file-path*))
+  (with-temp-file (nle::*shared-config-path*)
+    (let ((time 0) (polls 0))
+      (is (search "expired" (refusal-text error
+                               (nle::account-login nil :output (make-broadcast-stream)
+                                 :clock (lambda () time) :wait (lambda (seconds) (incf time seconds))
+                                 :request (nlk:lambda-ignoring (method path body poll timeout)
+                                            (when (eq method :get) (incf polls))
+                                            (values (shasht:read-json (if (eq method :post) +account-claim+ "{\"state\":\"waiting\"}")) 200))))))
+      (is (= 5 polls)))))
+
+(deftest account-login-http-refusals-and-bad-contracts-are-clear ()
+  (with-temp-file (nle::*auth-file-path*)
+    (with-temp-file (nle::*shared-config-path*)
+      (dolist (reply '((410 "{\"error\":\"That code has expired or was already used.\"}" "expired")
+                       (200 "{}" "invalid")
+                       (200 "{\"request\":\"../../secret\",\"poll\":\"p\",\"code\":\"DDAN-UY56\",\"confirm\":\"https://nodecode.ai/account/machines\",\"expires_in\":10,\"every\":2}" "invalid")))
+        (destructuring-bind (status body expected) reply
+          (is (search expected (refusal-text error
+                                  (nle::account-login nil :output (make-broadcast-stream)
+                                    :request (nlk:lambda-ignoring (&rest args)
+                                               (values (shasht:read-json body) status)))))))))))
+
+(deftest account-login-invalid-config-spends-no-code (with-temp-file (nle::*auth-file-path*))
+  (with-temp-file (nle::*shared-config-path* :contents "not json")
+    (is (search "Fix the shared config" (refusal-text error
+                                           (nle::account-login "DDAN-UY56" :request (lambda (&rest args)
+                                                                                   (declare (ignore args))
+                                                                                   (error "spent code"))))))
+    (is (not (probe-file nle::*auth-file-path*)))))
+
+(deftest account-login-grant-replaces-the-inline-key-that-would-outrank-it ()
+  (with-temp-file (nle::*auth-file-path*)
+    (with-temp-file (nle::*shared-config-path* :contents "{\"providers\":{\"nodecode\":{\"api_key\":\"stale-key\"}}}")
+      (nle::account-login-save (shasht:read-json +account-linked+))
+      (is (null (nlk:json-value (nle::read-shared-config) :string "providers" "nodecode" "api_key")))
+      (is (equal "machine-key-fixture" (nle::credential-key (nle::resolve-provider-credential "nodecode")))))))
+
+(deftest account-sign-in-picks-the-lead-model-only-while-none-is-chosen ()
+  (let ((grant (shasht:read-json +account-linked+)) (asked 0))
+    (flet ((request (url key timeout)
+             (declare (ignore key timeout))
+             (incf asked)
+             (values (shasht:read-json (if (search "/models" url) +account-models+ "{}")) 200)))
+      (with-temp-file (nle::*shared-config-path*)
+        (is (equal "cyber-v1" (nle::account-default-model grant :request #'request)) "the gate's first chat model, never its image model")
+        (nle::persist-shared-model-pin "default_model" "other" "m9")
+        (setf asked 0)
+        (is (null (nle::account-default-model grant :request #'request)) "a model chosen before stays")
+        (is (zerop asked) "and the gate is not asked"))
+      (let ((down (lambda (&rest args) (declare (ignore args)) (values nil 503))))
+        (is (null (nle::account-lead-model "k" "https://api.nodecode.ai/v1" :request down)) "a listing that cannot be read names none"))
+      (let ((out (make-string-output-stream)))
+        (nle::account-next-step out nil)
+        (is (search "/models to choose a nodecode model" (get-output-stream-string out)) "with none named, /models is the next step")))))
+
+(deftest account-meter-leads-with-what-pays-now ()
+  ;; The plan as nodecode.ai sells it: the gate's label, else its id capitalized (the id alone
+  ;; read Starter for Lite and Plus for Pro, checkout audit 2026-10-22).
+  (is (equal "Founders Base" (nle::account-plan-name (shasht:read-json "{\"name\":\"founders\",\"label\":\"Founders Base\"}"))))
+  (is (equal "Founders" (nle::account-plan-name (shasht:read-json "{\"name\":\"founders\"}"))))
+  (is (equal '("Founders Pro" "900" :tool)
+             (multiple-value-list
+              (nle::account-meter (shasht:read-json "{\"object\":\"usage\",\"plan\":{\"name\":\"plus\",\"label\":\"Founders Pro\",\"requests\":126000,\"left\":900},\"balance\":[],\"pays\":\"plan\"}")))))
+  (flet ((meter (json) (multiple-value-list (nle::account-meter (shasht:read-json json)))))
+    (is (equal '("Founders" "41.1k" :success) (meter +account-usage-plan+)))
+    (is (equal '("Credit" "€12.40" :success) (meter +account-usage-credit+)))
+    (is (equal '("nodecode.ai" "no plan or credit" :danger) (meter +account-usage-empty+)))
+    (is (equal '("Plus" "900" :tool)
+               (meter "{\"object\":\"usage\",\"plan\":{\"name\":\"plus\",\"requests\":126000,\"left\":900},\"balance\":[],\"pays\":\"plan\"}")))
+    (is (equal '("Founders" "credit €12.40" :tool)
+               (meter "{\"object\":\"usage\",\"plan\":{\"name\":\"founders\",\"requests\":42000,\"left\":0},\"balance\":[{\"currency\":\"eur\",\"micros\":12400000}],\"pays\":\"balance\"}")))
+    (is (equal '("Founders" "0 left" :danger)
+               (meter "{\"object\":\"usage\",\"plan\":{\"name\":\"founders\",\"requests\":42000,\"left\":0},\"balance\":[],\"pays\":\"none\"}"))))
+  (is (equal "Nov 3" (nle::account-day "2026-11-03T00:00:00Z")))
+  (is (null (nle::account-day "soon")))
+  (is (equal "41,187" (nle::account-count 41187.6)))
+  (is (equal "$3.05" (nle::account-money '("usd" . 3050000)))))
+
+(defun account-meter-fixture (json)
+  "*ACCOUNT-METER* as a shell holds it for the gate's usage JSON."
+  (let ((usage (shasht:read-json json)))
+    (multiple-value-bind (label value tone) (nle::account-meter usage)
+      (list :signed-in t :label label :value value :tone tone :usage usage))))
+
+(defun account-slab-painted (row room)
+  "ROW's painted line at ROOM columns as (TEXT . GROUNDS), GROUNDS each run's background rgb."
+  (let ((segs (funcall (nle::picker-row-paint row) nil room)))
+    (cons (format nil "~{~a~}" (mapcar #'nle::seg-text segs))
+          (mapcar (lambda (seg)
+                    (nle::visual-style-bg (nle::style-for-tone (or (nle::seg-ground seg) (nle::seg-tone seg) :foreground))))
+                  segs))))
+
+(deftest account-usage-draws-the-plan-and-the-credit-as-slabs-the-paying-one-lit ()
+  (let ((nle::*color-profile* :truecolor))
+    (let* ((nle::*account-meter* (account-meter-fixture +account-usage-plan+))
+           (rows (nle::account-slab-rows "7d"))
+           (lines (mapcar (lambda (row) (account-slab-painted row 110)) (remove-if-not #'nle::picker-row-paint rows))))
+      (is (equal "nodecode.ai account" (nle::picker-row-label (first rows))))
+      (is (every (lambda (row) (equal "7d" (nle::picker-row-key row))) rows))
+      (is (every #'nle::picker-row-heading (rest rows)) "the arrows pass over the slabs")
+      (let ((title (find-if (lambda (line) (search "Founders plan" (car line))) lines)))
+        (is title)
+        (is (search "● PAYING" (car title)) "the plan pays, so its slab carries the badge")
+        (is (search "API credit" (car title)))
+        (is (search "standby" (car title)) "the credit waits")
+        (is (not (equal (nle::visual-style-bg (nle::style-for-tone :toast-hover))
+                        (nle::visual-style-bg (nle::style-for-tone :toast)))))
+        (is (member (nle::visual-style-bg (nle::style-for-tone :toast-hover)) (cdr title) :test #'equal) "the paying slab is lifted")
+        (is (member (nle::visual-style-bg (nle::style-for-tone :toast)) (cdr title) :test #'equal) "the waiting one sits a step lower")
+        (is (notany (lambda (line) (find-if (lambda (c) (find c "─│╭╮╰╯")) (car line))) lines) "no rules drawn"))
+      (is (find-if (lambda (line) (search "41,187 requests left   of 42,000" (car line))) lines))
+      (is (find-if (lambda (line) (search "1 of 4" (car line))) lines))
+      (is (find-if (lambda (line) (search "€12.40" (car line))) lines))
+      (is (every (lambda (line) (<= (length (car line)) 110)) lines) "a line keeps to its room")
+      (is (equal "https://nodecode.ai/account/top-up"
+                 (loop for row in (remove-if-not #'nle::picker-row-paint rows)
+                       thereis (loop for seg in (funcall (nle::picker-row-paint row) nil 110)
+                                     when (search "top up at" (nle::seg-text seg))
+                                       return (nle::seg-link seg)))) "the top-up line opens its page on a click"))
+    (let* ((nle::*account-meter* (account-meter-fixture +account-usage-credit+))
+           (title (find-if (lambda (line) (search "API credit" (car line)))
+                           (mapcar (lambda (row) (account-slab-painted row 110))
+                                   (remove-if-not #'nle::picker-row-paint (nle::account-slab-rows "7d"))))))
+      (is (search "No plan" (car title)))
+      (is (search "● PAYING" (car title)) "the credit pays without a plan"))
+    (let ((nle::*account-meter* nil))
+      (is (null (nle::account-slab-rows "7d")) "a home not signed in draws no account"))))
+
+(deftest account-usage-dialog-redraws-the-account-rows-from-a-fresh-meter ()
+  ;; /usage reads the meter again when it opens: a top-up bought while the shell was open read
+  ;; `API credit: none' until the next prompt (checkout audit, 2026-10-22).
+  (let* ((tab (first (first nle::+usage-tabs+)))
+         (rows (list (nle::make-picker-row :key tab :label "stale account row" :value '(:account))
+                     (nle::make-picker-row :key tab :label "Today, $0.03 across 1 session."))))
+    (let ((nle::*account-meter* (account-meter-fixture +account-usage-plan+)))
+      (let ((labels (mapcar #'nle::picker-row-label (nle::usage-dialog-account-rows rows))))
+        (is (equal "nodecode.ai account" (first labels)) "the fresh meter's rows lead the tab")
+        (is (member "Today, $0.03 across 1 session." labels :test #'equal) "the tab's own rows stay")
+        (is (not (member "stale account row" labels :test #'equal)) "the stale meter's rows go")))
+    (let ((waiting (mapcar #'nle::picker-row-label (nle::usage-dialog-account-rows (rest rows)))))
+      (is (equal '("Today, $0.03 across 1 session.") waiting) "a tab still adding up takes them when its read lands"))))
+
+(deftest account-footer-badge-is-two-chips-where-grounds-paint ()
+  (let ((nle::*account-meter* (account-meter-fixture +account-usage-plan+))
+        (model (make-instance 'nle::chat-model)))
+    (let ((nle::*color-profile* :truecolor))
+      (let ((segs (nle::account-meter-segs model)))
+        (is (equal '(" Founders " " 41.1k ") (mapcar #'nle::seg-text segs)))
+        (is (eq :sheet-chip (nle::seg-ground (first segs))))
+        (is (equal (nle::visual-style-fg (nle::style-for-tone :success)) (nle::visual-style-bg (nle::seg-ground (second segs)))) "the value's chip is the meter's tone")
+        (is (every (lambda (seg) (equal '(:command . "usage") (nle::seg-link seg))) segs))))
+    (let ((nle::*color-profile* :ansi))
+      (let ((segs (nle::account-meter-segs model)))
+        (is (equal '("Founders 41.1k") (mapcar #'nle::seg-text segs)) "16 colours: plain words")
+        (is (null (nle::seg-ground (first segs))))))))
+
+(deftest account-usage-read-refuses-a-key-the-gate-refuses ()
+  (is (search "Sign in again"
+              (refusal-text error
+                (nle::account-usage-read "k" "https://api.nodecode.ai/v1/"
+                  :request (lambda (url key timeout)
+                             (declare (ignore key timeout))
+                             (is (equal "https://api.nodecode.ai/v1/usage" url))
+                             (values (shasht:read-json "{\"error\":{\"message\":\"Invalid API key.\"}}") 401))))))
+  (is (search "HTTP 200"
+              (refusal-text error
+                (nle::account-usage-read "k" "https://api.nodecode.ai/v1"
+                  :request (lambda (&rest args) (declare (ignore args)) (values (shasht:read-json "{}") 200)))))))
+
+(deftest account-json-is-the-read-model-shells-draw ()
+  (let ((nle::*account-login* nil))
+    (let ((json (let ((nle::*account-usage* (list :usage (shasht:read-json +account-usage-plan+)
+                                                  :read-at (get-universal-time))))
+                  (with-temp-file (nle::*auth-file-path*)
+                    (with-temp-file (nle::*shared-config-path*)
+                      (nle::account-login-save (shasht:read-json +account-linked+))
+                      (nle::account-json))))))
+      (is (eq t (nlk:json-value json :boolean "signed_in")))
+      (is (equal '("Founders" "41.1k" "success")
+                 (mapcar (lambda (key) (nlk:json-value json :string "meter" key)) '("label" "value" "tone"))))
+      (is (= 3 (length (nlk:json-value json :array "lines"))))
+      (is (eq :null (gethash "login" json)))
+      (is (equal '(:signed-in t :label "Founders" :value "41.1k" :tone :success)
+                 (subseq (nle::account-meter-of json) 0 8)))
+      (is (equal "plan" (nlk:json-value (getf (nle::account-meter-of json) :usage) :string "pays")))))
+  (with-temp-file (nle::*auth-file-path*)
+    (let ((nle::*account-usage* nil) (nle::*account-login* nil))
+      (let ((json (nle::account-json)))
+        (is (eq :false (gethash "signed_in" json)))
+        (is (eq :null (gethash "meter" json)))))))
+
+(deftest account-login-start-refuses-a-mode-and-answers-a-waiting-sign-in-again ()
+  (is (search "subscription or api" (refusal-text error (nle::account-login-start "bogus"))))
+  (let ((nle::*account-login* (list :state :waiting :mode "api" :url "https://nodecode.ai/cli?code=X" :code "X")))
+    (is (eq nle::*account-login*
+            (nle::account-login-start "api" :request (lambda (&rest args) (declare (ignore args)) (error "claimed twice")))))))

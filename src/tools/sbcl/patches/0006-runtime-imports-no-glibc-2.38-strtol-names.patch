@@ -1,0 +1,43 @@
+--- a/src/runtime/Config.x86-64-linux
++++ b/src/runtime/Config.x86-64-linux
+@@ -11,7 +11,7 @@
+ 
+ ASSEM_SRC = x86-64-assem.S
+ ARCH_SRC = x86-64-arch.c
+-OS_SRC = linux-os.c linux-mman.c x86-64-linux-os.c
++OS_SRC = linux-os.c linux-mman.c x86-64-linux-os.c glibc-floor.c
+ 
+ # The "--Wl,--export-dynamic" flags are here to help people
+ # experimenting with callbacks from C to SBCL, by allowing linkage to
+--- a/src/runtime/glibc-floor.c
++++ b/src/runtime/glibc-floor.c
+@@ -0,0 +1,29 @@
++/*
++ * The strtol family under glibc 2.38's C23 names, defined in the runtime.
++ *
++ * With _GNU_SOURCE, glibc 2.38 and later headers send strtol, strtoul and
++ * their long long forms (and atoi, which calls strtol) to __isoc23_strtol
++ * and friends, symbols no older glibc defines: one such call made the whole
++ * runtime refuse to start on Ubuntu 22.04 or Debian 12. Defined here, the
++ * runtime's own calls bind to these at link time and import nothing above
++ * GLIBC_2.34; hidden, they are never exported, so a library loaded later
++ * still reaches glibc's own. This file includes no libc header, so the calls
++ * below reach the classic symbols. The one C23 difference, a 0b prefix read
++ * in base 0 or 2, is not one the runtime parses.
++ */
++
++extern long strtol(const char *, char **, int);
++extern unsigned long strtoul(const char *, char **, int);
++extern long long strtoll(const char *, char **, int);
++extern unsigned long long strtoull(const char *, char **, int);
++
++#define FLOOR __attribute__((visibility("hidden")))
++
++FLOOR long __isoc23_strtol(const char *s, char **end, int base)
++{ return strtol(s, end, base); }
++FLOOR unsigned long __isoc23_strtoul(const char *s, char **end, int base)
++{ return strtoul(s, end, base); }
++FLOOR long long __isoc23_strtoll(const char *s, char **end, int base)
++{ return strtoll(s, end, base); }
++FLOOR unsigned long long __isoc23_strtoull(const char *s, char **end, int base)
++{ return strtoull(s, end, base); }

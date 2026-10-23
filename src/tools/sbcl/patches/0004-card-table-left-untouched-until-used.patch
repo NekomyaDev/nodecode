@@ -1,0 +1,40 @@
+The card table is left untouched until a card is used.
+
+It is sized for the whole dynamic space -- 4 MB at a nodecode image's 8 GB --
+and the runtime filled every byte with CARD_MARKED at startup, so all of it was
+resident from the first instruction when the live heap's cards are a sliver of
+it. Where CARD_MARKED is 0 (soft card marks: arm64 gencgc), fresh anonymous
+pages already read as marked, so the table comes from os_allocate and the fill
+is skipped; x86-64 and ppc64 keep their own placement and the fill. Not
+calloc: macOS's medium allocator zeroes a reused block itself, and the table
+measured as dirty as before (lane run 36186801486). With os_allocate the
+gateway's MALLOC_MEDIUM went 6.4 -> 2.3 MB.
+
+--- a/src/runtime/coreparse.c
++++ b/src/runtime/coreparse.c
+@@ -1161,15 +1161,25 @@
+     memcpy(mem, linkage_space, LISP_LINKAGE_SPACE_SIZE);
+     os_deallocate((void*)linkage_space, LISP_LINKAGE_SPACE_SIZE);
+     linkage_space = (lispobj*)mem;
++#elif CARD_MARKED == 0
++    /* Fresh anonymous pages read zero, which is CARD_MARKED already: a
++     * memset of zeros over the table only dirtied every page of it -- sized
++     * for the whole dynamic space, 4 MB at 8 GB -- when the live heap's cards
++     * are a sliver of it. Not calloc: macOS's medium allocator zeroes a
++     * reused block itself, and the table stayed as dirty as before. */
++    gc_card_mark = (void*)os_allocate(num_gc_cards);
++    if (!gc_card_mark) lose("allocating the card table failed");
+ #else
+     gc_card_mark = checked_malloc(num_gc_cards);
+ #endif
+ 
++#if !(CARD_MARKED == 0) || defined LISP_FEATURE_X86_64 || defined LISP_FEATURE_PPC64
+     /* The mark array used to work "by accident" if the numeric value of CARD_MARKED
+      * is 0 - or equivalently the "WP'ed" state - which is the value that calloc()
+      * fills with. If using malloc() we have to fill with CARD_MARKED,
+      * as I discovered when I changed that to a nonzero value */
+     memset(gc_card_mark, CARD_MARKED, num_gc_cards);
++#endif
+ 
+     gc_common_init();
+ 
