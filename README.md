@@ -29,40 +29,71 @@
 curl -fsSL https://nodecode.ai/install.sh | sh
 ```
 
-Then run `nodecode`. Setup finds the homes of Claude Code, Codex, Hermes, OpenCode, Cursor, Gemini CLI and nine other agents on your machine, and offers to bring over their providers, keys, memory, skills, MCP servers and sessions. On Windows, in PowerShell: `irm https://nodecode.ai/install.ps1 | iex`.
+Then run `nodecode`. Setup finds the homes of Claude Code, Codex, Hermes, OpenCode, Cursor, Gemini CLI and nine other agents on your machine, and offers to bring over their providers, keys, memory, skills, MCP servers and sessions.
+
+On Windows, in PowerShell:
+
+```powershell
+irm https://nodecode.ai/install.ps1 | iex
+```
 
 ## What's different
 
-<table>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png"><img alt="John McCarthy, who made Lisp, drawn in cells" src="resources/assets/readme/emblem-mccarthy-dark.png" width="240"></picture></td>
-<td>
-<h3>It writes its own tools</h3>
-<p>There is one tool, <code>eval</code>. The model writes Lisp into the running program, and a definition is live the moment it's evaluated, in every shell attached: the terminal, <code>nodecode web</code>, your phone through <code>/link</code>, Discord, Telegram and <code>nodecode rpc</code>. Missing a tool? It writes one.</p>
-</td>
-</tr>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png"><img alt="An orchid branch in flower, drawn in cells" src="resources/assets/readme/emblem-orchid-dark.png" width="240"></picture></td>
-<td>
-<h3>It keeps what works</h3>
-<p>Definitions that prove themselves go into your layer, <code>~/.nodecode/cells/&lt;you&gt;/</code>, committed to git. Every good state is a generation: <code>nodecode generations</code> lists them, <code>nodecode rollback N</code> goes back, and <code>--pristine</code> boots the binary alone.</p>
-</td>
-</tr>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png"><img alt="A nautilus in its shell, drawn in cells" src="resources/assets/readme/emblem-nautilus-dark.png" width="240"></picture></td>
-<td>
-<h3>It never compacts</h3>
-<p>When the context window fills, the oldest turns move to the log whole instead of being rewritten into a summary. <code>(recall-entry N)</code> reads any of them back word for word, and <code>/evict</code> makes room when you ask.</p>
-</td>
-</tr>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png"><img alt="Two dandelion clocks shedding seeds as single cells" src="resources/assets/readme/emblem-dandelion-dark.png" width="240"></picture></td>
-<td>
-<h3>Everything is a cell</h3>
-<p>Chat rooms, provider logins, tools, skills, MCP servers: each is a folder of Lisp. <code>nodecode add nc://cline</code> installs one from the hub. Or ask Nodecode to write one.</p>
-</td>
-</tr>
-</table>
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-mccarthy-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-mccarthy-dark.png 3.67x">
+  <img align="left" alt="John McCarthy, who made Lisp, drawn in cells" src="resources/assets/readme/emblem-mccarthy-dark.png">
+</picture>
+
+### It writes its own tools
+
+There is one tool, `eval`. The model writes Lisp into the running program, and a definition is live the moment it's evaluated, in every shell attached: the terminal, `nodecode web`, your phone through `/link`, Discord, Telegram and `nodecode rpc`. Missing a tool? It writes one.
+
+<br clear="left">
+
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-orchid-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-orchid-dark.png 3.67x">
+  <img align="left" alt="An orchid branch in flower, drawn in cells" src="resources/assets/readme/emblem-orchid-dark.png">
+</picture>
+
+### It keeps what works
+
+Definitions that prove themselves go into your layer, `~/.nodecode/cells/<you>/`, committed to git. Every good state is a generation: `nodecode generations` lists them, `nodecode rollback N` goes back, and `--pristine` boots the binary alone.
+
+<br clear="left">
+
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-nautilus-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-nautilus-dark.png 3.67x">
+  <img align="left" alt="A nautilus in its shell, drawn in cells" src="resources/assets/readme/emblem-nautilus-dark.png">
+</picture>
+
+### It never compacts
+
+When the context window fills, the oldest turns move to the log whole instead of being rewritten into a summary. `(recall-entry N)` reads any of them back word for word, and `/evict` makes room when you ask.
+
+<br clear="left">
+
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-dandelion-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-dandelion-dark.png 3.67x">
+  <img align="left" alt="Two dandelion clocks shedding seeds as single cells" src="resources/assets/readme/emblem-dandelion-dark.png">
+</picture>
+
+### Everything is a cell
+
+Chat rooms, provider logins, tools, skills, MCP servers: each is a folder of Lisp. `nodecode add nc://cline` installs one from the hub. Or ask Nodecode to write one.
+
+<br clear="left">
 
 ## Fewer tokens, same score
 
