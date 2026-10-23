@@ -13,8 +13,9 @@
 <p align="center">
   <a href="https://nodecode.ai">Website</a> &nbsp;·&nbsp;
   <a href="https://nodecode.ai/docs">Docs</a> &nbsp;·&nbsp;
-  <a href="https://nodecode.ai/cells">Cells</a> &nbsp;·&nbsp;
-  <a href="https://foresight-labs.eu/research">Research</a>
+  <a href="https://nodecode.ai/cells/browse">Cells</a> &nbsp;·&nbsp;
+  <a href="https://foresight-labs.eu/research">Research</a> &nbsp;·&nbsp;
+  <a href="https://discord.gg/cujGhaGCnS">Discord</a>
 </p>
 
 <br>
@@ -23,122 +24,126 @@
 
 <p align="center"><sub><i>you can't read PDFs. teach yourself.</i> It defines <code>read-pdf</code>, keeps it, and reads the invoice. A take from the launch trailer: the shell and every evaluation are real, the model's reply is scripted so the take repeats.</sub></p>
 
+Nodecode is an agent that rewrites itself. It runs as one process in SBCL, a Common Lisp system, and shells attach to it. The model has one tool: it evaluates Lisp in the running program and keeps what it defines.
+
 ## Install
+
+Linux and macOS:
 
 ```sh
 curl -fsSL https://nodecode.ai/install.sh | sh
 ```
 
-Then run `nodecode`. Setup finds the homes of Claude Code, Codex, Hermes, OpenCode, Cursor, Gemini CLI and nine other agents on your machine, and offers to bring over their providers, keys, memory, skills, MCP servers and sessions.
-
-On Windows, in PowerShell:
+Windows, in PowerShell:
 
 ```powershell
 irm https://nodecode.ai/install.ps1 | iex
 ```
 
+Then run `nodecode`. The first launch opens setup. If another coding agent lives on the machine (Claude Code, Codex, Hermes Agent, OpenCode, Cursor CLI, Gemini CLI and 9 more), setup first imports its keys, instructions, memory, skills, MCP servers, bots and jobs, without asking. Then you pick a provider, a model and the reasoning effort. See [Quickstart](https://nodecode.ai/docs/quickstart) and [First run](https://nodecode.ai/docs/first-run).
+
 ## What's different
 
-<picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-mccarthy-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-mccarthy-dark.png 3.67x">
-  <img align="left" alt="John McCarthy, who made Lisp, drawn in cells" src="resources/assets/readme/emblem-mccarthy-dark.png">
-</picture>
+<table>
+<tr>
+<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png"><img alt="An orchid branch in flower, drawn in cells" src="resources/assets/readme/emblem-orchid-dark.png" width="240"></picture></td>
+<td>
+<h3>Updates while it runs</h3>
+<p>An orchid opens new flowers while it keeps growing. An installed Nodecode updates itself the same way: most releases go live in the running program, one changed definition at a time, with no restart. Its own growth is kept as generations: <code>nodecode generations</code> lists them, <code>nodecode rollback N</code> restores one, and <code>--pristine</code> runs the binary alone. <a href="https://nodecode.ai/docs/updates">Updates</a></p>
+</td>
+</tr>
+<tr>
+<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png"><img alt="Two dandelion clocks shedding seeds as single cells" src="resources/assets/readme/emblem-dandelion-dark.png" width="240"></picture></td>
+<td>
+<h3>Everything is a cell</h3>
+<p>A cell is a folder that teaches Nodecode something new: a chat room it can live in, a provider login, a tool, a skill, a GitHub repo, an MCP server. <code>nodecode add nc://cline</code> installs one from the hub and turns it on in every attached shell. Or ask Nodecode to write one. <a href="https://nodecode.ai/docs/cells">Cells</a></p>
+</td>
+</tr>
+<tr>
+<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png"><img alt="A nautilus in its shell, drawn in cells" src="resources/assets/readme/emblem-nautilus-dark.png" width="240"></picture></td>
+<td>
+<h3>Edits its own context</h3>
+<p>Like an organism, Nodecode decides what stays in its context and what goes, and nothing it lets go is lost. Old turns leave the window whole, never rewritten into a summary; <code>(recall-entry N)</code> reads any of them back word for word, and <code>/evict</code> makes room when you ask. The idea behind <a href="https://arxiv.org/abs/2609.37725">Context Language Models</a> (Shao et al., 2026). <a href="https://nodecode.ai/docs/context">Context and recall</a></p>
+</td>
+</tr>
+<tr>
+<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png"><img alt="John McCarthy, who made Lisp, drawn in cells" src="resources/assets/readme/emblem-mccarthy-dark.png" width="240"></picture></td>
+<td>
+<h3>Rewrites itself in Lisp</h3>
+<p><i>"Its programs are in the same format as its data."</i> (John McCarthy, 1984). Code is data, so a program can rewrite itself while it runs. The model's one tool, <code>eval</code>, evaluates Lisp in the running Nodecode: what it defines runs at once and is kept, one file per definition, committed with git, loaded at every start. Missing a tool? It writes one. <a href="https://nodecode.ai/docs/eval">Eval and the layer</a></p>
+</td>
+</tr>
+</table>
 
-### It writes its own tools
+## One organism, every client
 
-There is one tool, `eval`. The model writes Lisp into the running program, and a definition is live the moment it's evaluated, in every shell attached: the terminal, `nodecode web`, your phone through `/link`, Discord, Telegram and `nodecode rpc`. Missing a tool? It writes one.
+The gateway is the local server every client attaches to: the terminal, a browser tab (`nodecode web`), your phone (`/link on`), bots in Discord, Telegram and Slack, and programs (`nodecode rpc`). They all talk to the same running Nodecode, so a tool it writes in one is there in all of them.
 
-<br clear="left">
+On Linux and macOS the background gateway is on by default: it keeps Nodecode running with no shell open and starts it at login. `nodecode gateway` shows its state. On Windows, keep `nodecode serve` open in a terminal. See [The gateway](https://nodecode.ai/docs/gateway).
 
-<picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-orchid-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-orchid-dark.png 3.67x">
-  <img align="left" alt="An orchid branch in flower, drawn in cells" src="resources/assets/readme/emblem-orchid-dark.png">
-</picture>
+To put it in a chat room:
 
-### It keeps what works
+```sh
+nodecode gateway setup discord    # or telegram, slack
+```
 
-Definitions that prove themselves go into your layer, `~/.nodecode/cells/<you>/`, committed to git. Every good state is a generation: `nodecode generations` lists them, `nodecode rollback N` goes back, and `--pristine` boots the binary alone.
+It walks one channel from the bot's token to a connected bot. The token stays in a private file or an environment variable, never in the config, and the bot answers only the channels and people you allow.
 
-<br clear="left">
-
-<picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-nautilus-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-nautilus-dark.png 3.67x">
-  <img align="left" alt="A nautilus in its shell, drawn in cells" src="resources/assets/readme/emblem-nautilus-dark.png">
-</picture>
-
-### It never compacts
-
-When the context window fills, the oldest turns move to the log whole instead of being rewritten into a summary. `(recall-entry N)` reads any of them back word for word, and `/evict` makes room when you ask.
-
-<br clear="left">
-
-<picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-dandelion-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-dandelion-dark.png 3.67x">
-  <img align="left" alt="Two dandelion clocks shedding seeds as single cells" src="resources/assets/readme/emblem-dandelion-dark.png">
-</picture>
-
-### Everything is a cell
-
-Chat rooms, provider logins, tools, skills, MCP servers: each is a folder of Lisp. `nodecode add nc://cline` installs one from the hub. Or ask Nodecode to write one.
-
-<br clear="left">
-
-## Fewer tokens, same score
+## Fewer tokens, same games won
 
 <picture>
   <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/bars-light.svg">
-  <img alt="Tokens to finish ARC-AGI-3. Claude Opus 5.5, all 25 games, both scoring 100: Nodecode 181M tokens ($124), Claude Code 393M ($210). GPT-6.1 Sol, the 20 games both finished: Nodecode 85M ($25), Codex 107M ($36)." src="resources/assets/readme/bars-dark.svg" width="100%">
+  <img alt="Tokens to finish ARC-AGI-3, all 25 public games. Claude Opus 5.5, both scoring 100: Nodecode 181M tokens ($124), Claude Code 393M ($210). GPT-6.1 Sol, both winning all 25 games: Nodecode 58M ($33), Codex CLI 172M ($43)." src="resources/assets/readme/bars-dark.svg" width="100%">
 </picture>
 
-On the same model, Nodecode finished every public ARC-AGI-3 game with **54% fewer tokens than Claude Code**, and used 21% fewer than Codex on the games both finished. The write-up is coming on [Foresight Labs](https://foresight-labs.eu/research).
+On the same model, Nodecode won every public ARC-AGI-3 game with **54% fewer tokens than Claude Code** (41% less cost) and **66% fewer tokens than the Codex CLI** (24% less cost). The write-up: [What ARC-AGI-3 costs](https://foresight-labs.eu/research/fl-2026-006), Foresight Labs FL-2026-006.
 
 <details>
 <summary><b>How the runs were measured</b></summary>
 <br>
 
-The 25 public ARC-AGI-3 games, each scored with the official scorecard rule. A token is every token put through the model: input, cache reads and writes, and output. Both pairs ran at xhigh effort. On Claude Opus 5.5, Nodecode and Claude Code each scored 100 on all 25 games. On GPT-6.1 Sol, Codex finished 20 games, and the pair is compared on those. Hermes finished 3 games on Opus 5.5, too few for a bar; on those 3 Nodecode used 36% fewer tokens. These are first cuts, and the numbers match the chart on [nodecode.ai](https://nodecode.ai).
+The 25 public ARC-AGI-3 games, 183 levels, each scored with the official scorecard rule, all harnesses at xhigh reasoning. A token is every token put through the model: input, cache reads, cache writes and output. Cost uses each provider's official prices of 11 October 2026. Where a game was played more than once, the best run counts, for every harness alike. On Claude Opus 5.5, Nodecode and Claude Code both score 100. On GPT-6.1 Sol, both win all 25 games; the Codex CLI, playing through Prime Intellect's published game adapter, scores 99.9 to Nodecode's 99.5 because it took fewer actions. The GPT-6.1 Sol runs reached the model through a LiteLLM gateway and a third-party API relay.
 
 </details>
 
-## Cells
+## Cells that ship with it
 
-A cell is a folder of Lisp with its own `.asd` that grows the organism. These ship with it, and setup asks which to turn on:
+Turn one on with Space in `/cells`, or `nodecode add nc://NAME`:
 
 | Cell | What it does |
 | --- | --- |
-| `discord` · `telegram` | Talk to Nodecode through a bot: threads, attachments, durable transcripts |
-| `web` · `link` | Use it in a browser tab with `nodecode web`; reach that page from anywhere with `/link on` |
+| `discord` · `telegram` · `slack` | Talk to Nodecode through a bot |
+| `web` · `link` | Use it in a browser tab with `nodecode web`; open that page from anywhere with `/link on` |
 | `chrome` | Drive Chrome, with the companion extension |
 | `websearch` | Web search and page fetch, no key needed |
-| `mcp` | Tools from the MCP servers you list |
+| `mcp` | Tools from the MCP servers you list in the config |
 | `cron` | Prompts that run on a schedule |
-| `team` | Several sessions work one task together in a shared folder |
+| `goal` | A session keeps taking turns until its goal's check passes |
+| `team` · `board` | Several sessions work one task in a shared folder; sessions on a board read each other's posts |
 | `prs` | Pull requests ranked and reviewed minutes after each push |
 | `experience` | Learns from each turn: reflections and recaps |
+| `context` | The always-visible context-editing skill |
+| `cyber-security` | The latest breaches and the fix for each, re-scanned every 6 hours; checks your server and website and walks you through patching |
 | `guard` | Refuses risky shell commands before they run |
-| `import` | Brings another coding agent's home into this one |
+| `qa` | Anonymous usage counts, one page a week, sent only if you say so |
 
-More are on the hub at [nodecode.ai/cells](https://nodecode.ai/cells). To write your own, ask Nodecode, or start from the contract in [src/CELLS.md](src/CELLS.md).
+More, from Nodecode and the community, are at [nodecode.ai/cells](https://nodecode.ai/cells/browse). To write your own, ask Nodecode, or read the [Cell API](https://nodecode.ai/docs/cell-api) and [src/CELLS.md](src/CELLS.md).
 
 ## More
 
 <details>
-<summary><b>Bring any model</b></summary>
+<summary><b>What does it cost?</b></summary>
 <br>
 
-Four wire dialects (Anthropic Messages, OpenAI Responses, OpenAI Chat Completions and Google) cover the hosted providers and any OpenAI-compatible server, local ones included. The [models.dev](https://models.dev) catalog supplies context windows and prices, `/think` sets the effort, and setup keeps keys in `~/.nodecode/auth.json` (mode 0600). See [Models](https://nodecode.ai/docs/models).
+Nodecode is free, under the MIT license. It runs on your own provider key and the provider bills you; `/usage` reports the spend.
+
+</details>
+
+<details>
+<summary><b>Which models?</b></summary>
+<br>
+
+Any provider that speaks one of four wire dialects: `openai-completions`, `openai-responses`, `anthropic` or `google`. `/models` connects a provider from the [models.dev](https://models.dev) catalog, saves its key in `~/.nodecode/auth.json` and picks its model; a local server works through `base_url`. Its Backup tab lists the models a failing turn moves on to. See [Models and providers](https://nodecode.ai/docs/models).
 
 </details>
 
@@ -154,15 +159,15 @@ No. You ask in plain words, the model writes the Lisp, and your project can be i
 <summary><b>Is it safe to run?</b></summary>
 <br>
 
-Nodecode has no sandbox. It runs as your user, with your permissions. The `guard` cell refuses known risky commands, but it only slows mistakes down; it can't stop them. For untrusted work or unattended bots, run it in a container or a VM. The details are in [Security](https://nodecode.ai/docs/security).
+Nodecode ships no sandbox. `eval` runs Lisp and shell commands with everything your user account can do. The `guard` cell refuses listed risky commands, but it is not a security boundary. A cell is code with full access to your files and keys, and a message in a chat room runs with the same authority, so allowlists decide who may send one. Run it in a container or a VM before you leave it working alone. See [Safety and trust](https://nodecode.ai/docs/security).
 
 </details>
 
 <details>
-<summary><b>Does it phone home?</b></summary>
+<summary><b>Where does my data live?</b></summary>
 <br>
 
-There's no account, and no telemetry unless you turn it on. It talks to the provider you configure, checks the release feed for updates (`update.mode`: `auto`, `ask` or `off`), and fetches the models.dev catalog. The `qa` cell sends anonymous usage counts once a week, and only if you say so.
+In `~/.nodecode/`: the config, your keys, every session, the cells and what the agent kept. What a turn sends goes to the provider you chose. Besides that, Nodecode checks the release feed for updates (`update.mode`: `auto`, `ask` or `off`) and reads the models.dev catalog. The `qa` cell sends anonymous counts only if you set it to weekly. See [Files](https://nodecode.ai/docs/files).
 
 </details>
 
@@ -170,7 +175,19 @@ There's no account, and no telemetry unless you turn it on. It talks to the prov
 <summary><b>Which platforms?</b></summary>
 <br>
 
-Linux x86_64 with glibc 2.38 or newer (Ubuntu 24.04+, Debian 13+, Fedora 39+, Arch), Apple Silicon on macOS 15+, and Windows x86_64 with Git for Windows. There are no arm64 Linux or Intel Mac builds yet. See [Install](https://nodecode.ai/docs/install).
+- Linux x86_64 with glibc 2.34 or newer: Ubuntu 22.04+, Debian 12+, RHEL 9+, Fedora 35+, Arch.
+- macOS 15+ on Apple Silicon, with Homebrew `openssl@3` and `zstd`.
+- Windows x86_64, with Git for Windows. No background gateway: run `nodecode serve` instead.
+
+No builds yet for arm64 Linux or Intel Macs. See [Current support](https://nodecode.ai/docs/support).
+
+</details>
+
+<details>
+<summary><b>Update and uninstall</b></summary>
+<br>
+
+An installed build updates itself by default; `nodecode update` moves to the latest release now, and `nodecode --version` names the build you run. To uninstall on Linux or macOS, run `nodecode gateway off`, then delete `~/.local/share/nodecode/` and `~/.local/bin/nodecode`. On Windows, delete `%LOCALAPPDATA%\Programs\nodecode\` and its user PATH entry. Delete `~/.nodecode/` only to remove your sessions, keys and definitions too. See [Updates](https://nodecode.ai/docs/updates).
 
 </details>
 
@@ -178,15 +195,24 @@ Linux x86_64 with glibc 2.38 or newer (Ubuntu 24.04+, Debian 13+, Fedora 39+, Ar
 <summary><b>Build from source</b></summary>
 <br>
 
-You need SBCL (we build on 2.6.8), [Quicklisp](https://www.quicklisp.org/beta/), python3, `just` and git.
+You need SBCL, [Quicklisp](https://www.quicklisp.org/beta/), git, python3 and `just`.
 
 ```sh
 git clone https://github.com/nodecode-ai/nodecode && cd nodecode
-just release     # pulls the shipped cells, dumps ./nodecode
+just test        # run the core suite
+just release     # pull the shipped cells, dump ./nodecode
 ./nodecode
 ```
 
-Want to work on Nodecode itself? Start with [src/README.md](src/README.md), which explains how it's put together.
+`just check` runs lint, the line-count ceiling, build and test. A source build doesn't update itself: pull and run `just release` again. To work on Nodecode itself, start with [src/README.md](src/README.md).
+
+</details>
+
+<details>
+<summary><b>Where do I get help?</b></summary>
+<br>
+
+Run `/doctor`: it lists what is missing and prints a fix for each problem. To ask a person, join the [Nodecode Discord](https://discord.gg/cujGhaGCnS) or write to [hi@nodecode.ai](mailto:hi@nodecode.ai). See [Troubleshooting](https://nodecode.ai/docs/troubleshooting).
 
 </details>
 
