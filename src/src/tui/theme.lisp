@@ -272,6 +272,11 @@ One table, so a tone cannot reach the palette with its overlay forgotten.")
   "WCAG relative-contrast ratio between rgb A and B, scaled by 100."
   (round (* 100 (contrast-ratio a b))))
 
+(defun dark-rgb-p (rgb)
+  "Whether RGB is a dark ground, its WCAG luminance under 0.2: the side of
+it text stands on is the light one."
+  (< (relative-luminance rgb) 0.2d0))
+
 (defun dim-color (foreground background &optional (grounds (list background)))
   "Deepest blend of FOREGROUND toward BACKGROUND still clearing the contrast
 floor on every one of GROUNDS. Tones already at or below the floor return
@@ -352,8 +357,13 @@ on -- its own background, else each of *TEXT-GROUNDS*."
 (defun shadow-rgb (rgb)
   "RGB at *SHADOW-PERCENT* of every channel: the same hue at less light,
 integer floor per channel (Zig shadowColor). NIL stays NIL."
+  ;; On a palette whose ink is dark the shade lifts instead: each channel
+  ;; keeps that share of its distance from white, so a shadowed run fades
+  ;; toward the paper there as it fades toward the dark here.
   (when rgb
-    (mapcar (lambda (channel) (floor (* channel *shadow-percent*) 100)) rgb)))
+    (if (dark-rgb-p (visual-style-fg (style-for-tone :foreground)))
+        (mapcar (lambda (channel) (- 255 (floor (* (- 255 channel) *shadow-percent*) 100))) rgb)
+        (mapcar (lambda (channel) (floor (* channel *shadow-percent*) 100)) rgb))))
 
 (defun shadow-style (style)
   "STYLE under a shadow: the foreground dimmed, a missing one resolving to the
@@ -964,16 +974,23 @@ order (config.zig themeColorsForName)."
                   (/ d (- 1 (abs (- (* 2 l) 1))))
                   l)))))
 
-(defun solved-lightness (hue saturation target canvas &aux (dark (< (relative-luminance canvas) 0.2d0)))
+(defun solved-lightness (hue saturation target canvas &optional (lighter (dark-rgb-p canvas)))
   "The lightness at which HUE at SATURATION stands TARGET:1 off CANVAS, on
-the side of it away from the canvas: lighter on a dark one."
+the side of it LIGHTER says: lighter than it, or darker. Unsaid, the side
+away from the canvas: lighter on a dark one. A target past that side's end
+solves to the end."
+  ;; A probe on the other side of the canvas is never far enough, however far
+  ;; it stands: near a low target both ends of the scale clear it.
   (loop with lo = 0d0 and hi = 1d0
         repeat 40
-        do (let ((mid (/ (+ lo hi) 2)))
-             (if (eq dark (>= (contrast-ratio (hsl-rgb hue saturation mid) canvas) target))
+        do (let* ((mid (/ (+ lo hi) 2))
+                  (rgb (hsl-rgb hue saturation mid))
+                  (far (and (eq lighter (> (relative-luminance rgb) (relative-luminance canvas)))
+                            (>= (contrast-ratio rgb canvas) target))))
+             (if (eq lighter far)
                  (setf hi mid)
                  (setf lo mid)))
-        finally (return (if dark hi lo))))
+        finally (return (if lighter hi lo))))
 
 (defparameter +answer-ladder+
   '((:head 10d0 0.626d0) (:code 8d0 0.52d0) (:marks 6d0 0.4d0) (:id 4.7d0 0.3d0) (:lines 2.7d0 0.24d0))
@@ -1041,14 +1058,93 @@ strong accent, and LINK, its links' blue, on CANVAS."
                         link
                         (solved (rgb-hsl link) 0.7d0 4.6d0)))))))
 
+;;; --- a theme turned over -------------------------------------------------
+;;; A transparent theme stands on the terminal's canvas, which can be paper
+;;; where the theme was drawn for the dark (Tungstene's ink read 1.05:1 on
+;;; cream) or a colour of its own (PowerShell's navy). There every colour of
+;;; the theme turns onto that canvas, as far off it as it stood off the
+;;; theme's own; what derives from those colours derives on it too.
+
+(defun washed-rgb (pole paper target &aux (lo 0d0) (hi 1d0))
+  "PAPER washed toward POLE just far enough to stand TARGET:1 off it: POLE
+itself when nothing short of it does."
+  (flet ((wash (share)
+           (mapcar (lambda (p c) (round (+ (* share p) (* (- 1 share) c)))) pole paper)))
+    (loop repeat 30
+          do (let ((mid (/ (+ lo hi) 2)))
+               (if (>= (contrast-ratio (wash mid) paper) target)
+                   (setf hi mid)
+                   (setf lo mid))))
+    (wash hi)))
+
+(defun turned-rgb (rgb from to ink)
+  "RGB, drawn on canvas FROM with INK for its text, turned onto canvas TO:
+TO itself for FROM, else a colour standing as far off TO as RGB stood off
+FROM, on INK's side of TO when RGB stood on INK's side of FROM and past TO
+when it stood past FROM. A colour keeps its hue and saturation; a grey
+turns into TO washed toward black or white."
+  ;; A grey is paper and ink mixed, so on the new paper it is that paper
+  ;; mixed: a panel a step off cream is cream a step darker, never a cold
+  ;; slab laid on it, and quiet text is the paper's own grey.
+  (if (equal rgb from)
+      to
+      (multiple-value-bind (hue saturation) (rgb-hsl rgb)
+        (let* ((ratio (contrast-ratio rgb from))
+               (inky (eq (> (relative-luminance rgb) (relative-luminance from))
+                         (> (relative-luminance ink) (relative-luminance from))))
+               (lighter (eq inky (dark-rgb-p to))))
+          (if (< saturation 0.2d0)
+              (washed-rgb (if lighter '(255 255 255) '(0 0 0)) to ratio)
+              (hsl-rgb hue saturation (solved-lightness hue saturation ratio to lighter)))))))
+
+(defun turning-canvas (colors &aux (own (gethash :background colors)) (terminal *terminal-canvas*))
+  "The terminal canvas theme COLORS turns onto, or NIL: a transparent
+theme's, once the terminal has said what it is, when it lies on the other
+side of the theme's own or is a colour of its own: its channels at least
+30 apart, PowerShell's navy (85) and Solarized's teal (54) but not a
+near-black's blue tint (Dracula's 14)."
+  (and (gethash :transparent-background colors) own terminal
+       (not (equal own terminal))
+       (or (not (eq (dark-rgb-p own) (dark-rgb-p terminal)))
+           (>= (- (reduce #'max terminal) (reduce #'min terminal)) 30))
+       terminal))
+
+(defun turned-colors (colors to &aux (turned (make-hash-table :test #'eq))
+                                     (from (gethash :background colors))
+                                     (ink (or (gethash :foreground colors)
+                                              (visual-style-fg (second (assoc :foreground *tones*))))))
+  "COLORS, a theme's colour table, every colour in it turned from the theme's
+own canvas onto TO."
+  (maphash (lambda (key value)
+             (setf (gethash key turned) (if (consp value) (turned-rgb value from to ink) value)))
+           colors)
+  turned)
+
+(defun turned-palette (palette to &aux (from (visual-style-bg (gethash :background palette)))
+                                       (ink (visual-style-fg (gethash :foreground palette))))
+  "PALETTE, the compiled defaults, every tone's colours turned from its canvas
+onto TO: a tone no theme key reaches stands on the turned canvas too."
+  (maphash (lambda (tone style)
+             (setf (gethash tone palette)
+                   (style-with style
+                               :fg (and style.fg (turned-rgb style.fg from to ink))
+                               :bg (and style.bg (turned-rgb style.bg from to ink)))))
+           palette)
+  palette)
+
 ;;; --- the theme overlay (src/tui/render_plan.zig visualPaletteFromThemeColors)
 
-(defun palette-from-theme-colors (colors &aux (palette (default-palette)))
+(defun palette-from-theme-colors (colors &aux (canvas (turning-canvas colors))
+                                              (colors (if canvas (turned-colors colors canvas) colors))
+                                              (palette (if canvas
+                                                           (turned-palette (default-palette) canvas)
+                                                           (default-palette))))
   "A fresh palette: the compiled defaults with COLORS overlaid through the Zig
 chooseRgb fallback chains, verbatim."
   ;; A chain that resolves to nothing keeps the default, so a sparse theme
   ;; still renders completely; attributes (bold, dim) always survive because
-  ;; the overlay only replaces colors.
+  ;; the overlay only replaces colors. On a canvas TURNING-CANVAS names,
+  ;; the theme overlays turned onto it, defaults and all.
   (flet ((c (&rest keys)
            (some (lambda (key) (gethash key colors)) keys))
          (fg (tone) (visual-style-fg (gethash tone palette)))
@@ -1115,6 +1211,19 @@ chooseRgb fallback chains, verbatim."
                                    ((:toast :toast-hover :toast-danger) (:toast :toast-hover)))
           do (dolist (tone tones)
                (put tone :fg (legible-rgb (fg tone) (mapcar #'bg grounds) (fg :foreground))))))
+  ;; A transparent theme's text stands on the terminal's canvas: a tone
+  ;; legible on the theme's own canvas and not on that one is lifted until
+  ;; it is. A tone drawn faint stays faint.
+  (let ((terminal (and (gethash :transparent-background colors) *terminal-canvas*))
+        (own (visual-style-bg (gethash :background palette)))
+        (ink (visual-style-fg (gethash :foreground palette))))
+    (when (and terminal own (not (equal terminal own)))
+      (loop for tone being the hash-keys of palette using (hash-value style)
+            when (and style.fg (null style.bg)
+                      (>= (contrast-ratio-x100 style.fg own) 450)
+                      (< (contrast-ratio-x100 style.fg terminal) 450))
+              do (setf (gethash tone palette)
+                       (style-with style :fg (legible-rgb style.fg (list terminal) ink))))))
   ;; The selection is blended later, over the painter's cells. Retain its
   ;; nominal canvas ground before clearing the actual canvas fill: the
   ;; inherited terminal RGB is unknown, not the selection color itself.
