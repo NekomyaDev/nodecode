@@ -44,12 +44,21 @@
   "Refuse the request as STATUS with CODE, the formatted text its message."
   (error 'folder-refused :status status :code code :detail (apply #'format nil control args)))
 
+(defparameter +folder-separators+ #+win32 "/\\" #-win32 "/"
+  "What separates the steps of a path the page names: `/', and on Windows
+`\\' as well, which Windows walks as it walks `/'.")
+
 (defun session-workspace-directory (session-id &aux (cwd (nlk:find-session-cwd session-id)))
   "SESSION-ID's durable workspace when it is an absolute directory name, else
 NIL."
   ;; Never an empty or a relative one: a store opened over either walks this
-  ;; process's own directory, which is a live checkout often enough.
-  (and (stringp cwd) (plusp (length cwd)) (char= #\/ (char cwd 0)) cwd))
+  ;; process's own directory, which is a live checkout often enough. On
+  ;; Windows an absolute one leads with a drive, C:\ or C:/, or a share's \\.
+  (and (stringp cwd) (plusp (length cwd))
+       (or (find (char cwd 0) +folder-separators+)
+           #+win32 (and (< 2 (length cwd)) (alpha-char-p (char cwd 0)) (char= #\: (char cwd 1))
+                        (find (char cwd 2) +folder-separators+)))
+       cwd))
 
 (defun session-folder (session-id)
   "SESSION-ID's folder with every link on the way to it followed, as a native
@@ -73,13 +82,20 @@ it names is not a directory any more."
     (quri:url-decode raw)))
 
 (defun folder-steps (rel)
-  "The steps of REL, a `/'-separated path relative to a session's folder, the
-empty ones and `.' dropped. Refused when REL is absolute, climbs, or holds a NUL."
+  "The steps of REL, a path relative to a session's folder separated by
++FOLDER-SEPARATORS+, the empty ones and `.' dropped. Refused when REL is
+absolute, climbs, or holds a NUL -- or on Windows a `:', a drive's or a
+stream's."
   (when (find (code-char 0) rel)
     (folder-refuse 400 "invalid_path" "a path holds no NUL"))
+  ;; Split on `/' alone, `..\..\x' was one step on Windows: it climbed out
+  ;; unseen, and a name not there outside answered 404, not outside_folder.
+  #+win32 (when (find #\: rel)
+            (folder-refuse 400 "invalid_path" "a path holds no colon"))
   (let ((steps (remove-if (lambda (step) (member step '("" ".") :test #'string=))
-                          (uiop:split-string rel :separator "/"))))
-    (when (or (uiop:string-prefix-p "/" rel) (member ".." steps :test #'string=))
+                          (uiop:split-string rel :separator +folder-separators+))))
+    (when (or (and (plusp (length rel)) (find (char rel 0) +folder-separators+))
+              (member ".." steps :test #'string=))
       (folder-refuse 403 "outside_folder" "the path ~a leads outside the session's folder" rel))
     steps))
 
@@ -240,6 +256,9 @@ and a directory's name always."
   (cond ((or (null name) (zerop (length name)))
          (folder-refuse 400 "invalid_name" "name the file (name=...)"))
         ((find #\/ name) (folder-refuse 400 "invalid_name" "a file's name holds no slash"))
+        ;; Windows walks `\' as `/': `..\x' was written in the folder above.
+        #+win32 ((find #\\ name) (folder-refuse 400 "invalid_name" "a file's name holds no backslash"))
+        #+win32 ((find #\: name) (folder-refuse 400 "invalid_name" "a file's name holds no colon"))
         ((find (code-char 0) name) (folder-refuse 400 "invalid_name" "a file's name holds no NUL"))
         ((member name '("." "..") :test #'string=)
          (folder-refuse 400 "invalid_name" "a file's name is not . or ..")))

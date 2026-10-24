@@ -822,11 +822,18 @@ characters in a name."
   "PATH without its last `/'-separated step, or NIL when it has only one."
   (and slash (subseq path 0 slash)))
 
-(defun path-within-p (path directory)
+(defun path-within-p (path directory &aux (separators #+win32 "/\\" #-win32 "/"))
   "Whether the native PATH is DIRECTORY or lies beneath it, both with no
-trailing slash."
+trailing slash but a Windows drive's root, which keeps its own."
+  ;; A native path on Windows is spelled with `\' (REAL-PATH's), and Windows
+  ;; walks `/' as it walks `\': held to `/' alone, nothing beneath a folder
+  ;; there lay beneath it.
   (or (string= path directory)
-      (uiop:string-prefix-p (concatenate 'string directory "/") path)))
+      (and (< (length directory) (length path))
+           (uiop:string-prefix-p directory path)
+           (or (find (char path (length directory)) separators)
+               (and (plusp (length directory))
+                    (find (char directory (1- (length directory))) separators))))))
 
 (defun directory-names (directory)
   "The names in the native DIRECTORY, `.' and `..' aside; NIL when it cannot

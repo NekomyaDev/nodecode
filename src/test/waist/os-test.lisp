@@ -449,6 +449,17 @@ process's own, or NIL."
       (nlk:mapped-resident-bytes core)
       (is (< (- (sb-ext:get-bytes-consed) before) (* 64 1024)) "under 64 KB a read"))))
 
+(deftest a-path-lies-within-a-folder-only-past-a-separator ()
+  (is (nlk::path-within-p "/a/b" "/a/b") "the folder itself")
+  (is (nlk::path-within-p "/a/b/c" "/a/b") "a step beneath it")
+  (is (not (nlk::path-within-p "/a/bc" "/a/b")) "never a name that only starts like it")
+  (is (not (nlk::path-within-p "/a" "/a/b")) "nor the folder above")
+  (is (nlk::path-within-p "/a" "") "everything lies within the root")
+  ;; REAL-PATH spells a Windows path with `\'.
+  #+win32 (is (nlk::path-within-p "C:\\proj\\src" "C:\\proj") "Windows steps with \\")
+  #+win32 (is (nlk::path-within-p "C:\\proj" "C:\\") "a drive's root keeps its own")
+  #+win32 (is (not (nlk::path-within-p "C:\\project" "C:\\proj")) "nor there a name that only starts like it"))
+
 #-win32
 (deftest a-listing-says-what-each-name-is (with-temp-workspace (dir "a.txt" "sub/b.txt"))
   ;; The kind rides the listing, so a walk after folders stats no file.
