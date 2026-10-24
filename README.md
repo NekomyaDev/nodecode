@@ -44,36 +44,61 @@ Then run `nodecode`. The first launch opens setup. If another coding agent lives
 
 ## What's different
 
-<table>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png"><img alt="An orchid branch in flower, drawn in cells" src="resources/assets/readme/emblem-orchid-dark.png" width="240"></picture></td>
-<td>
-<h3>Updates while it runs</h3>
-<p>An orchid opens new flowers while it keeps growing. An installed Nodecode updates itself the same way: most releases go live in the running program, one changed definition at a time, with no restart. Its own growth is kept as generations: <code>nodecode generations</code> lists them, <code>nodecode rollback N</code> restores one, and <code>--pristine</code> runs the binary alone. <a href="https://nodecode.ai/docs/updates">Updates</a></p>
-</td>
-</tr>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png"><img alt="Two dandelion clocks shedding seeds as single cells" src="resources/assets/readme/emblem-dandelion-dark.png" width="240"></picture></td>
-<td>
-<h3>Everything is a cell</h3>
-<p>A cell is a folder that teaches Nodecode something new: a chat room it can live in, a provider login, a tool, a skill, a GitHub repo, an MCP server. <code>nodecode add nc://cline</code> installs one from the hub and turns it on in every attached shell. Or ask Nodecode to write one. <a href="https://nodecode.ai/docs/cells">Cells</a></p>
-</td>
-</tr>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png"><img alt="A nautilus in its shell, drawn in cells" src="resources/assets/readme/emblem-nautilus-dark.png" width="240"></picture></td>
-<td>
-<h3>Edits its own context</h3>
-<p>Like an organism, Nodecode decides what stays in its context and what goes, and nothing it lets go is lost. Old turns leave the window whole, never rewritten into a summary; <code>(recall-entry N)</code> reads any of them back word for word, and <code>/evict</code> makes room when you ask. The idea behind <a href="https://arxiv.org/abs/2609.37725">Context Language Models</a> (Shao et al., 2026). <a href="https://nodecode.ai/docs/context">Context and recall</a></p>
-</td>
-</tr>
-<tr>
-<td width="240"><picture><source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png"><img alt="John McCarthy, who made Lisp, drawn in cells" src="resources/assets/readme/emblem-mccarthy-dark.png" width="240"></picture></td>
-<td>
-<h3>Rewrites itself in Lisp</h3>
-<p><i>"Its programs are in the same format as its data."</i> (John McCarthy, 1984). Code is data, so a program can rewrite itself while it runs. The model's one tool, <code>eval</code>, evaluates Lisp in the running Nodecode: what it defines runs at once and is kept, one file per definition, committed with git, loaded at every start. Missing a tool? It writes one. <a href="https://nodecode.ai/docs/eval">Eval and the layer</a></p>
-</td>
-</tr>
-</table>
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-orchid-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-orchid-dark.png 3.67x">
+  <img align="left" alt="An orchid branch in flower, drawn in cells" src="resources/assets/readme/emblem-orchid-dark.png">
+</picture>
+
+### Updates while it runs
+
+An orchid opens new flowers while it keeps growing. An installed Nodecode updates itself the same way: most releases go live in the running program, one changed definition at a time, with no restart. Its own growth is kept as generations: `nodecode generations` lists them, `nodecode rollback N` restores one, and `--pristine` runs the binary alone. [Updates](https://nodecode.ai/docs/updates)
+
+<br clear="left">
+
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-dandelion-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-dandelion-dark.png 3.67x">
+  <img align="left" alt="Two dandelion clocks shedding seeds as single cells" src="resources/assets/readme/emblem-dandelion-dark.png">
+</picture>
+
+### Everything is a cell
+
+A cell is a folder that teaches Nodecode something new: a chat room it can live in, a provider login, a tool, a skill, a GitHub repo, an MCP server. `nodecode add nc://cline` installs one from the hub and turns it on in every attached shell. Or ask Nodecode to write one. [Cells](https://nodecode.ai/docs/cells)
+
+<br clear="left">
+
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-nautilus-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-nautilus-dark.png 3.67x">
+  <img align="left" alt="A nautilus in its shell, drawn in cells" src="resources/assets/readme/emblem-nautilus-dark.png">
+</picture>
+
+### Edits its own context
+
+Like an organism, Nodecode decides what stays in its context and what goes, and nothing it lets go is lost. Old turns leave the window whole, never rewritten into a summary; `(recall-entry N)` reads any of them back word for word, and `/evict` makes room when you ask. The idea behind [Context Language Models](https://arxiv.org/abs/2609.37725) (Shao et al., 2026). [Context and recall](https://nodecode.ai/docs/context)
+
+<br clear="left">
+
+<picture>
+  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 2x">
+  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-mccarthy-dark.png 2x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-mccarthy-dark.png 3.67x">
+  <img align="left" alt="John McCarthy, who made Lisp, drawn in cells" src="resources/assets/readme/emblem-mccarthy-dark.png">
+</picture>
+
+### Rewrites itself in Lisp
+
+*"Its programs are in the same format as its data."* (John McCarthy, 1984). Code is data, so a program can rewrite itself while it runs. The model's one tool, `eval`, evaluates Lisp in the running Nodecode: what it defines runs at once and is kept, one file per definition, committed with git, loaded at every start. Missing a tool? It writes one. [Eval and the layer](https://nodecode.ai/docs/eval)
+
+<br clear="left">
 
 ## One organism, every client
 
