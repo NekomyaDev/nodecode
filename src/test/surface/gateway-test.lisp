@@ -1513,24 +1513,55 @@ for a field left to the gateway, each under its own WHY."
 
 ;;; --- the note a boot says when it is back -----------------------------------
 
-(deftest note-back-hands-the-model-what-it-keeps (with-temp-store ())
-  ;; The brief is the model's, from what it keeps: the note carries the
-  ;; index of memories and skills, so it can speak as one who knows the user.
-  (with-stubbed-fdefinition (nle::index-text (session-id)
-                              (format nil "[memory]~%- gpu-credits: 28 programs filed, two answered"))
-    (with-saved-globals (nle::*resumed-turns*)
-      (nlk:session-state-put "gateway" "run"
-                             (nlk:encode-json-object
-                              (nlk:json-object "started" 1 "stopped" (- (get-universal-time) 60))))
-      (is-carrying (note (nle::note-back nil))
-        ("nodecode is running again" "the note")
-        ("your memories and skills" "what it keeps, said to be so")
-        ("gpu-credits: 28 programs filed, two answered" "and the index itself")))))
+(deftest the-boot-note-carries-no-memory-or-title (with-temp-store ())
+  ;; The words the model writes of the note are posted in every channel's
+  ;; home room, where other people read them: nothing the organism keeps --
+  ;; a memory, a skill, a session's title -- rides the note or its side call,
+  ;; even to a model that echoes all it is handed.
+  (let ((asked '()) (said '()))
+    (with-stubbed-fdefinitions ((nle::index-text (session-id)
+                                  (format nil "[memory]~%- gpu-credits: 28 programs filed, two answered"))
+                                (nlk::session-title (session-id) "fix the payroll leak")
+                                (nle::broadcast-organism (kind payload &key session-id)
+                                  (push (cons kind (nlk:json-value payload :string "text")) said)))
+      (with-saved-globals (nle::*resumed-turns* nle::*organism-note*)
+        (nlk:session-state-put "gateway" "run"
+                               (nlk:encode-json-object
+                                (nlk:json-object "started" 1 "stopped" (- (get-universal-time) 60))))
+        (let ((note (nle::note-back
+                     (list (list (nlk::%make-durable-turn :session-id "s-cut" :turn-id "t-cut"
+                                                          :command-id "c-cut" :definition-revision "base")
+                                 "go on")))))
+          (is-carrying note
+            ("nodecode is running again" "the note")
+            ("It picks up the turn the stop cut off." "the turn it picks up, counted")
+            (:absent "gpu-credits" "no memory")
+            (:absent "memories and skills" "no index")
+            (:absent "payroll" "no session title"))
+          (is-carrying (resumed (gethash "t-cut" nle::*resumed-turns*))
+            ("A restart cut this turn off" "the turn picked up is told")
+            (:absent "payroll" "and named no title"))
+          (with-provider-stub (context
+                               (let ((request (nlk:encode-json-object (nle::messages-with-head context))))
+                                 (push request asked)
+                                 (wire-message "assistant" :content request)))
+            (nle::say-note note)
+            (is (= 1 (length asked)) "one side call")
+            (is-carrying (request (first asked))
+              ("nodecode is running again" "the side call is handed the note")
+              (:absent "gpu-credits" "and no memory")
+              (:absent "payroll" "and no title")
+              (:absent "your memories" "and is not told to speak from them"))
+            (is (equal "organism.note" (car (first said))) "the words are said")
+            (is-carrying (posted (cdr (first said)))
+              ("nodecode is running again" "what is posted")
+              (:absent "gpu-credits" "posts no memory")
+              (:absent "payroll" "posts no title"))))))))
 
 (deftest back-note-says-how-long-why-and-what-it-picks-up (let ((now 100000)))
   ;; Every return, the operator's own quit too, for the model to say.
-  (flet ((note (run &rest titles)
-           (nle::back-note (and run (apply #'nlk:make-json-object run)) titles now)))
+  (flet ((note (run &optional (turns 0))
+           (nle::back-note (and run (apply #'nlk:make-json-object run)) turns now)))
     (is (null (note nil)) "a home's first boot")
     ;; The operator's own quit too.
     (is (equal "nodecode is running again after 3m away."
@@ -1539,13 +1570,14 @@ for a field left to the gateway, each under its own WHY."
                (note (list "started" 1 "stopped" (- now 5)))) "what stopped it is never told")
     (is (equal "nodecode is running again after 3m away: it restarted for an update."
                (note (list "started" 1 "stopped" (- now 180) "why" "an update"))))
-    ;; A run that died left no stop: its gap is not known.
-    (is (equal "nodecode is running again. It picks up the turn the stop cut off in \"fix the flaky test\"."
-               (note (list "started" 1) "fix the flaky test")))
-    (is (equal "nodecode is running again after 2h away. It picks up the turn the stop cut off in \"x\"."
-               (note (list "started" 1 "stopped" (- now 7200) "why" "quit") "x")))
-    (is (equal "nodecode is running again after 45s away. It picks up 4 turns the stop cut off: \"a\", \"b\", \"a session\", ...."
-               (note (list "started" 1 "stopped" (- now 45)) "a" "b" "" "d")))))
+    ;; A run that died left no stop: its gap is not known. The turns it
+    ;; picks up are counted, never named.
+    (is (equal "nodecode is running again. It picks up the turn the stop cut off."
+               (note (list "started" 1) 1)))
+    (is (equal "nodecode is running again after 2h away. It picks up the turn the stop cut off."
+               (note (list "started" 1 "stopped" (- now 7200) "why" "quit") 1)))
+    (is (equal "nodecode is running again after 45s away. It picks up 4 turns the stop cut off."
+               (note (list "started" 1 "stopped" (- now 45)) 4)))))
 
 (deftest say-note-says-the-models-words (let ((asked '()) (said '())))
   ;; "we should just make a note that it is back so
@@ -1587,8 +1619,7 @@ for a field left to the gateway, each under its own WHY."
   ;; picks up -- and a shell attaching hears what it wrote behind its replay.
   (with-gateway-scratch (dir "back")
     (let ((path (merge-pathnames "history.db" dir))
-          ;; As the requests spell it, short of the title's escaped quotes.
-          (note "nodecode is running again after 3m away: it restarted for an update. It picks up the turn the stop cut off in"))
+          (note "nodecode is running again after 3m away: it restarted for an update. It picks up the turn the stop cut off."))
       (nlk:open-store :path path)
       (nlk:create-session :id "back-cut")
       (with-saved-globals (nlk::*recovery-boot-id* nle::*organism-note*)

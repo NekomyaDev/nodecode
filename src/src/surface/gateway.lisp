@@ -4099,50 +4099,42 @@ boot's note."
     (apply #'note-run "started" (json-value run :integer "started") "stopped" (get-universal-time)
            (and *stop-reason* (list "why" *stop-reason*)))))
 
-(defun back-note (run titles &optional (now (get-universal-time)))
+(defun back-note (run turns &optional (now (get-universal-time)))
   "What a boot has to tell, for the model to say, from RUN -- the `run' stamp
-the gateway before it left, NIL at a home's first boot -- and the TITLES of
-the sessions whose turns it picks up; NIL when it has nothing to tell."
+the gateway before it left, NIL at a home's first boot -- and TURNS, how many
+turns it picks up; NIL when it has nothing to tell."
   ;; A run that died left no stop, so its gap is not known. What stopped it
   ;; -- a quit, a kill, a crash -- is not told: it is nothing the user needs.
-  ;; A restart for an update is told: that one changed what runs.
-  (let* ((stopped (json-value run :integer "stopped"))
-         (why (json-value run :string "why"))
-         (named (loop for title in titles
-                      repeat 3
-                      collect (format nil "\"~a\"" (nlk:clip (nlk:one-line (if (plusp (length title)) title "a session")) 48)))))
+  ;; A restart for an update is told: that one changed what runs. The turns
+  ;; are counted, never named: the words reach every channel's home room
+  ;; (SAY-NOTE), and a session's title is its room's, not theirs.
+  (let ((stopped (json-value run :integer "stopped"))
+        (why (json-value run :string "why")))
     (when run
       (format nil "nodecode is running again~@[ after ~a away~]~@[: it restarted for ~a~].~@[ ~a~]"
               (and stopped (plusp (- now stopped)) (nlk:duration-text (- now stopped) :coarse t))
               (and (not (equal why "quit")) why)
-              (case (length titles)
+              (case turns
                 (0 nil)
-                (1 (format nil "It picks up the turn the stop cut off in ~a." (first named)))
-                (t (format nil "It picks up ~d turns the stop cut off: ~{~a~^, ~}~:[~;, ...~]."
-                           (length titles) named (> (length titles) 3))))))))
+                (1 "It picks up the turn the stop cut off.")
+                (t (format nil "It picks up ~d turns the stop cut off." turns)))))))
 
 (defun note-back (resumable)
   "This boot's note, from the `run' stamp the gateway before it left and
 RESUMABLE, the (TURN INPUT) pairs it picks up; each of those turns is told it
 at its next round. This boot's own stamp replaces the one it read. The note
-the model says carries what it keeps, for it to speak as one who knows the
-user; a turn picked up has its own."
-  (let ((run (ignore-errors (nlk:decode-json (nlk:session-state-get "gateway" "run"))))
-        (titles (loop for (turn) in resumable
-                      collect (nlk::session-title (nlk:durable-turn-session-id turn)))))
+carries nothing the organism keeps -- no memory, skill or session title: the
+words the model writes of it are posted in every channel's home room, where
+others read them (SAY-NOTE); a turn picked up knows its own work."
+  (let ((run (ignore-errors (nlk:decode-json (nlk:session-state-get "gateway" "run")))))
     (note-run "started" (get-universal-time))
     (clrhash *resumed-turns*)
-    (when-let (note (back-note run titles))
+    (when-let (note (back-note run (length resumable)))
       (loop for (turn) in resumable
             do (setf (gethash (nlk:durable-turn-turn-id turn) *resumed-turns*)
                      (format nil "A restart cut this turn off, and it resumes where it stopped. ~a Open your next message with one short sentence telling the user you are back and what you were doing, then carry on."
                              note)))
-      ;; What it keeps is the index a conversation in the user's newest
-      ;; session is pinned with: memories and skills, that project's too
-      ;; (INDEX-TEXT). A brief with the note alone could say only "Back up."
-      (let ((kept (ignore-errors (index-text (getf (first (nlk:list-sessions)) :id)))))
-        (format nil "~a~@[~%~%What you keep -- your memories and skills, as your index lists them:~%~a~]"
-                note (and (plusp (length kept)) kept))))))
+      note)))
 
 (nlk:define-section ("welcome")
   (:guide "What nodecode says when it comes back -- after a stop, a crash or an update: a short brief in the side-work model's words, as a row in a chat that has begun and in each channel's home room; the home screen shows none.")
@@ -4157,12 +4149,12 @@ user; a turn picked up has its own."
         :note))
 
 (defparameter +note-instruction+
-  "You are nodecode, the user's agent. The message is a note your own runtime wrote about you: that you are running again after a stop, how long you were gone and what stopped you, maybe a release you now run and what changed in it or the turn the stop cut off that you pick up, and what you keep -- your memories of the user and their work, and your skills. Brief the user, in your own words and as yourself, the way someone who knows them says they are back: one or two short sentences, written the way your memories say they like to be spoken to. It always carries humor: one dry, warm, wry line -- about being back, the time away or the work waiting -- never at the user's expense; a brief with no joke in it is not done. Make it theirs: from your memories, a word on the work they have going or something they care about, named as they would name it -- never a memory's or a skill's name, a path, or a preference or a rule of theirs read back to them. It is a brief, not a pitch: never offer, ask or suggest to continue, resume, pick up where you left off or carry anything on, and end without a question. Never speak of your memories, skills or index as such, nor of anything kept, lost or intact: use what you know, do not report on it. What you keep is what you know, not work in flight: never claim it is running or left running. Never say why or how you stopped -- a quit, a kill, a crash, a service, from outside or from within: only that you are back. Say how long you were gone only broadly -- a moment, a few minutes, a while, overnight -- never an exact figure. Say that you were updated only when the note says so, never with a version number. Of a list of changes, name the few that matter to a user, each one meaning exactly what its line says: never turn one around. Plain text; no greeting, heading or emoji. Do not copy the note's sentences, and add nothing it does not say."
+  "You are nodecode, the user's agent. The message is a note your own runtime wrote about you: that you are running again after a stop, how long you were gone and whether an update restarted you, maybe a release you now run and what changed in it, or how many turns the stop cut off that you pick up. What you write is posted where other people read it, a channel's shared room among them. Brief the user, in your own words and as yourself, that you are back: one or two short sentences. It always carries humor: one dry, warm, wry line -- about being back or the time away -- never at the user's expense; a brief with no joke in it is not done. It is a brief, not a pitch: never offer, ask or suggest to continue, resume, pick up where you left off or carry anything on, and end without a question. Never claim work is running or left running. Never say why or how you stopped -- a quit, a kill, a crash, a service, from outside or from within: only that you are back. Say how long you were gone only broadly -- a moment, a few minutes, a while, overnight -- never an exact figure. Say that you were updated only when the note says so, never with a version number. Of a list of changes, name the few that matter to a user, each one meaning exactly what its line says: never turn one around. Plain text; no greeting, heading or emoji. Do not copy the note's sentences, and add nothing it does not say."
   "The side call's whole instruction for a note the organism says (SAY-NOTE).
-It speaks from what the organism keeps, its memories and skills, as a brief
-with a touch of humor and no offer to carry the user's work on, never
-what stopped it; the time away said broadly, a
-release without its version.")
+Its words are posted in shared channel rooms, so it says what the note says
+and nothing the organism keeps: a brief with a touch of humor and no offer
+to carry the user's work on, never what stopped it; the time away said
+broadly, a release without its version.")
 
 (defparameter +note-max-tokens+ 1024
   "The side call's ceiling: a few sentences, and room for a thinking model to
