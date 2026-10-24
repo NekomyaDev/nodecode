@@ -668,6 +668,21 @@ completed. BODY runs with SID bound."
     ;; a short name still lists what the call carries
     (is (search "no strings entry named \"absent\"" (nle::background-capable-eval "($ \"absent\")" 5000 strings)))))
 
+;; A ($ "K") example shown without its strings entry reads as the text
+;; itself: a model wraps its edit's old text in $ and the first edit fails.
+(deftest eval-description-shows-each-strings-read-beside-its-entry ()
+  (let* ((description (getf (second (nle::find-tool "eval")) :description))
+         (marker "($ \"")
+         (keys (loop for start = (search marker description)
+                       then (search marker description :start2 end)
+                     for end = (and start (position #\" description :start (+ start (length marker))))
+                     while end
+                     collect (subseq description (+ start (length marker)) end))))
+    (is (member "old" keys :test #'string=) "the description shows edit's strings read")
+    (dolist (key keys)
+      (is (search (format nil "\"~a\": \"" key) description) (format nil "($ ~s) is shown beside its strings entry" key)))
+    (is (search "never the text" description) "and says $ takes an entry's name, never the text")))
+
 (deftests sh-answers (command expected expected-status status-why)
   (multiple-value-bind (output status) (nle:sh command)
     (is (equal expected output) output)

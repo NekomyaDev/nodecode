@@ -2425,7 +2425,7 @@ nothing, which is no fence's to repeat."
  "eval"
  (list :description
        (concatenate 'string
-                    "Evaluate Common Lisp forms in the live image and return their printed values; only the last value prints in full. (sh \"ls -la\") runs a shell command and returns its output. (edit path ($ \"old\") ($ \"new\")) replaces the one occurrence of old in the file; (write-file path ($ \"text\")) writes a whole file, parents created. (look path) shows you an image file. In a Lisp string a backslash only escapes the next character (\"\\n\" reads as n), so put text dense with backslashes, double quotes or newlines in the strings object, whichever verb takes it, and read each entry by its name, ($ \"name\"); a shell command carrying a heredoc goes there whole: strings {\"script\": \"...\"} with (sh ($ \"script\")). A snippet's opening ;; line is its note, kept past eviction: write what you would resume from. When you use eval for work, begin the form with one concise leading ;; progress comment naming what you are about to do; this comment becomes the live activity label in channel cards and the TUI."
+                    "Evaluate Common Lisp forms in the live image and return their printed values; only the last value prints in full. (sh \"ls -la\") runs a shell command and returns its output. (edit path ($ \"old\") ($ \"new\")) with strings {\"old\": \"<the text now in the file>\", \"new\": \"<its replacement>\"} replaces the one occurrence of old in the file; (write-file path ($ \"text\")) with strings {\"text\": \"<the whole file>\"} writes a whole file, parents created. $ takes an entry's name, never the text itself. (look path) shows you an image file. In a Lisp string a backslash only escapes the next character (\"\\n\" reads as n), so text dense with backslashes, double quotes or newlines goes in the strings object, whichever verb takes it; a shell command carrying a heredoc goes there whole: strings {\"script\": \"...\"} with (sh ($ \"script\")). A snippet's opening ;; line is its note, kept past eviction: write what you would resume from. When you use eval for work, begin the form with one concise leading ;; progress comment naming what you are about to do; this comment becomes the live activity label in channel cards and the TUI."
                     #+linux " A snippet's last form, when it only reads - no verb, file, process, socket, assignment or definition - is watched: it runs again after each later snippet and comes back as one line only when its value changes."
                     " (help :eval) has the rest.")
        :parameters
@@ -2442,7 +2442,7 @@ nothing, which is no fence's to repeat."
                                  "type" "object"
                                  "additionalProperties" (make-json-object
                                                          "type" "string")
-                                 "description" "Named literal texts sent beside the form; ($ \"name\") in the form reads one exactly as sent, with only JSON escaping."))
+                                 "description" "Named literal texts sent beside the form, as {\"old\": \"...\"}: the form reads each by its key, ($ \"old\"), exactly as sent, with only JSON escaping. A key is a short name you choose, never the text."))
         "required" (vector "form")))
  (lambda (arguments)
    (with-json ((form :any "form")
