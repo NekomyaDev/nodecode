@@ -228,11 +228,16 @@ reader (NLK:READ-EVENTS) skips and its socket counts as a line."
         ;; read here: the pinger's thread sees only the global value
         (seconds *stream-ping-seconds*)
         (open t))
-    (labels ((send (text)
+    (labels ((send (text &optional last)
+               ;; LAST shuts the stream in the same hold that writes it: a ping
+               ;; whose wait ran out as RUN returned queues on the lock, and
+               ;; would land after the result it must never follow.
                (bt2:with-lock-held (lock)
-                 (when open (funcall writer text))))
-             (event (object)
-               (send (format nil "data: ~a~%~%" (nlk:encode-json-object object)))))
+                 (when open
+                   (funcall writer text)
+                   (when last (setf open nil)))))
+             (event (object &optional last)
+               (send (format nil "data: ~a~%~%" (nlk:encode-json-object object)) last)))
       (let ((pinger (nlk:spawn "import-stream-ping"
                       (loop until (bt2:wait-on-semaphore done :timeout seconds)
                             ;; a peer gone mid-plan is the plan's to find, not this thread's
@@ -246,7 +251,8 @@ reader (NLK:READ-EVENTS) skips and its socket counts as a line."
                   "type" "result" "result"
                   (funcall run (lambda (phase item)
                                  (event (nlk:json-object "type" "item" "phase" phase
-                                                         "item" (item-json item))))))))))))
+                                                         "item" (item-json item))))))
+                 t))))))
 
 (defun import-route (env &aux (request (nle::gateway-request-json env))
                                (method (nlk:json-value request :string "method")))
