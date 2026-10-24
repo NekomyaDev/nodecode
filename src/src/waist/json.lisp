@@ -123,6 +123,10 @@ now on; the table starts over once it holds +JSON-SHARED-STRING-COUNT+."
                 *json-shared-strings* table))
         (setf (gethash string table) string))))
 
+(defparameter +json-max-exponent+ 100000
+  "The largest exponent a number may spell: far past any float (1e308), and
+small enough that raising ten to it is instant.")
+
 ;;; The reader descends, so depth is stack; wire JSON nests single digits deep
 ;;; and a document that nests hundreds is a peer's accident or a probe.
 (defparameter +json-max-depth+ 256
@@ -336,20 +340,27 @@ they spell, with room left for the escape that follows them."
                    (t
                     (setf narrow nil)
                     (incf index)))))))
-         (read-digits (accumulator refusal &aux (start index))
+         (read-digits (accumulator refusal &optional limit &aux (start index))
            "Fold the digits at INDEX into ACCUMULATOR; => the value, and a
-REFUSAL when there were none."
+REFUSAL when there were none, and a refusal when LIMIT is given and the value
+passes it."
            (loop for value = (and (< index end)
                                   (let ((byte (aref octets index)))
                                     (and (<= #.(char-code #\0) byte #.(char-code #\9))
                                          (- byte #.(char-code #\0)))))
                  while value
                  do (setf accumulator (+ (* 10 accumulator) value))
+                    (when (and limit (> accumulator limit)) (refuse "an exponent out of range"))
                     (incf index))
            (when (= index start) (refuse refusal))
            accumulator)
          (read-number (&aux (negative (when (eql (peek) #.(char-code #\-)) (incf index) t))
-                            (mantissa (read-digits 0 "a number without digits"))
+                            (leading-zero (and (eql (peek) #.(char-code #\0))
+                                               (< (1+ index) end)
+                                               (<= #.(char-code #\0) (aref octets (1+ index))
+                                                   #.(char-code #\9))))
+                            (mantissa (progn (when leading-zero (refuse "a number with a leading zero"))
+                                             (read-digits 0 "a number without digits")))
                             (scale 0)
                             (exponent 0)
                             (fractional nil))
@@ -365,14 +376,19 @@ REFUSAL when there were none."
              (let ((negative-exponent (case (peek)
                                         (#.(char-code #\+) (incf index) nil)
                                         (#.(char-code #\-) (incf index) t))))
-               (let ((value (read-digits 0 "an exponent without digits")))
+               ;; Stopped at the limit as it is read: ten to an exponent of
+               ;; thousands of digits would cost the decoder its time for
+               ;; nothing, since no float is that far out.
+               (let ((value (read-digits 0 "an exponent without digits" +json-max-exponent+)))
                  (setf exponent (if negative-exponent (- value) value)))))
            (let ((value (if negative (- mantissa) mantissa)))
              (if fractional
                  ;; shasht's own arithmetic, so a float reads the same
                  ;; here as it did there: the digits as an integer, scaled.
-                 (* value (expt (coerce 10 *read-default-float-format*)
-                                (+ scale exponent)))
+                 (handler-case (* value (expt (coerce 10 *read-default-float-format*)
+                                              (+ scale exponent)))
+                   ;; Past the largest float: a refusal, not a raw arithmetic error.
+                   (arithmetic-error () (refuse "a number out of range")))
                  value)))
          (expect-word (word value &aux (stop (+ index (length word))))
            (unless (and (<= stop end)

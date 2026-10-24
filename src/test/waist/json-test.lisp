@@ -590,12 +590,21 @@ write's four values."
 
 (deftest decode-json-refuses-what-is-not-json ()
   (dolist (text '("" "{" "[1,]" "{\"a\"}" "{\"a\":}" "{a:1}" "[1 2]"
-                  "tru" "nul" "-" "1." "1e" "\"unclosed"))
+                  "tru" "nul" "-" "1." "1e" "\"unclosed"
+                  "01" "-01" "[00]" "1e400" "1e999999999999999999999"))
     (is (signals-error nlk:json-refusal (nlk:decode-json text))
         (format nil "~s is refused" text)))
   (is (signals-error nlk:json-refusal
                      (nlk:decode-json (format nil "~v@{[~}1~v@{]~}"
                                               300 300 nil)))))
+
+(deftest decode-json-reads-the-numbers-a-leading-zero-allows ()
+  (is (eql 0 (nlk:decode-json "0")))
+  (is (eql 0 (nlk:decode-json "-0")))
+  (is (= 0.5d0 (nlk:decode-json "0.5")))
+  (is (= 10 (nlk:decode-json "10")))
+  (is (= 0 (nlk:decode-json "0e1")))
+  (is (= 0 (nlk:decode-json "1e-400")) "a number too small for a float reads as zero"))
 
 (deftest decode-json-reads-streams-and-refuses-a-trailing-value-when-asked ()
   (is (equal 7 (gethash "n" (nlk:decode-json (make-string-input-stream "{\"n\":7}")))))
