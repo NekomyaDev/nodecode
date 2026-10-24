@@ -5082,6 +5082,34 @@ that reads the bytes back rather than going through the reader."
        (let ((nle::*shared-config-path* ,path))
          ,@body))))
 
+(deftest an-sdk-family-env-key-rides-only-to-its-vendors-own-endpoint ()
+  ;; OPENAI_API_KEY is OpenAI's, ANTHROPIC_API_KEY Anthropic's: a keyless
+  ;; provider of their family -- the build's OpenCode Zen lane, Nodecode's own
+  ;; API, a configured one at another host -- never sends them. Each lane's
+  ;; vendor still gets its own, and a probe, which composes no endpoint,
+  ;; counts neither.
+  (with-temp-shared-config ("{\"providers\": {\"elsewhere\": {\"sdk\": \"anthropic\", \"base_url\": \"https://api.elsewhere.test/anthropic\"}}}")
+    (let ((nle::*api-key* nil) (nle::*endpoint* nil) (none #p"/nonexistent/auth.json"))
+      (with-stubbed-fdefinition (nle::credential-env (name)
+                                 (cdr (assoc name '(("OPENAI_API_KEY" . "sk-openai") ("ANTHROPIC_API_KEY" . "sk-ant"))
+                                             :test #'equal)))
+        (flet ((credential (provider &rest args)
+                 (apply #'nle::resolve-provider-credential provider :auth-path none args)))
+          (let ((zen (credential "openai-completions")))
+            (is (eq :public (nle::credential-source zen)) "the keyless Zen lane stays keyless")
+            (is (equal '(("authorization" . "Bearer public")) (nle::provider-auth-headers :openai-completions (nle::credential-key zen))) "and its round carries no OpenAI key"))
+          (let ((nodecode (credential "openai-completions" :endpoint "https://api.nodecode.ai/v1/chat/completions"))
+                (elsewhere (credential "elsewhere"))
+                (openai-chat (credential "openai-completions" :endpoint "https://api.openai.com/v1/chat/completions"))
+                (plain-http (credential "openai-completions" :endpoint "http://api.openai.com/v1/chat/completions")))
+            (is (eq :public (nle::credential-source nodecode)) "nor does another chat-completions host")
+            (is (eq :public (nle::credential-source elsewhere)) "nor does an anthropic-wire provider at another host")
+            (is (equal "sk-openai" (nle::credential-key openai-chat)) "the chat wire at OpenAI's own host takes OPENAI_API_KEY")
+            (is (eq :public (nle::credential-source plain-http)) "but never over another scheme"))
+          (is (equal "sk-openai" (nle::credential-key (credential "openai-responses"))) "OpenAI's own lane takes it at api.openai.com")
+          (is (equal "sk-ant" (nle::credential-key (credential "anthropic"))) "Anthropic's own provider takes ANTHROPIC_API_KEY")
+          (is (eq :public (nle::credential-source (credential "openai-responses" :probe t))) "a probe composes no endpoint, so it counts no family default"))))))
+
 (deftest configured-provider-sdk-names-the-lane-and-base-url-the-endpoint ()
   (with-temp-shared-config ("{
   // the Zig-shared operator config, comments and all

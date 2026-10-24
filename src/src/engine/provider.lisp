@@ -3018,14 +3018,32 @@ carried.")
   "PROVIDER's own <ID>_API_KEY from the environment, or NIL."
   (credential-env (format nil "~a_API_KEY" (substitute #\_ #\- (string-upcase provider)))))
 
-(defun env-credential (provider family)
-  "The environment ladder: derived name first, SDK-family default second,
-and ANTHROPIC_AUTH_TOKEN third for anthropic only (still sent as x-api-key)."
+(defun env-credential (provider family endpoint)
+  "The environment ladder: derived name first; the SDK-family default second,
+only when ENDPOINT is its vendor's own API; ANTHROPIC_AUTH_TOKEN third for
+anthropic only (still sent as x-api-key)."
+  ;; The SDK default is one vendor's key: OPENAI_API_KEY is OpenAI's, though
+  ;; every compatible provider rides the chat-completions wire, the build's
+  ;; keyless OpenCode Zen lane among them. So it goes only where its vendor's
+  ;; own lane goes by default -- the same scheme, host and port -- and never
+  ;; to whichever host a keyless provider of that family dials. A probe
+  ;; composes no ENDPOINT, so it never counts the default; the vendors' own
+  ;; providers name it as their derived variable anyway.
   (or (provider-env-key provider)
-      (credential-env (ecase family
-                        ((:openai :openai-completions) "OPENAI_API_KEY")
-                        (:anthropic "ANTHROPIC_API_KEY")
-                        (:google "GOOGLE_API_KEY")))
+      (destructuring-bind (name vendor-lane)
+          (ecase family
+            ((:openai :openai-completions) '("OPENAI_API_KEY" "openai-responses"))
+            (:anthropic '("ANTHROPIC_API_KEY" "anthropic"))
+            (:google '("GOOGLE_API_KEY" "google")))
+        (flet ((origin (url &aux (uri (and url (ignore-errors (quri:uri url)))))
+                 (and uri (quri:uri-host uri)
+                      (list (string-downcase (or (quri:uri-scheme uri) ""))
+                            (string-downcase (quri:uri-host uri))
+                            (quri:uri-port uri)))))
+          (let ((lane (find-lane-by-name vendor-lane nil)))
+            (and lane (origin endpoint)
+                 (equal (origin endpoint) (origin (provider-lane-default-endpoint lane)))
+                 (credential-env name)))))
       (and (string-equal provider "anthropic")
            (credential-env "ANTHROPIC_AUTH_TOKEN"))))
 
@@ -3039,7 +3057,9 @@ and ANTHROPIC_AUTH_TOKEN third for anthropic only (still sent as x-api-key)."
   ;; served at). PROBE walks the same chain without its two side effects, for
   ;; a question of where the credential comes from: a !command never runs (the
   ;; config tier answers), and a corrupt auth file reads as none. It composes
-  ;; no endpoint either, so the question never reads the catalog.
+  ;; no endpoint either, so the question never reads the catalog, and the
+  ;; environment's SDK-family default, which rides only to its vendor's own
+  ;; endpoint (ENV-CREDENTIAL), never answers it.
   (let* ((lane (find-provider-lane provider))
          (family lane.family)
          (endpoint (unless probe
@@ -3083,7 +3103,7 @@ and ANTHROPIC_AUTH_TOKEN third for anthropic only (still sent as x-api-key)."
           (call-hooked :credential
                        (list :provider provider :family family :auth auth
                              :auth-path auth-path :endpoint endpoint)
-                       (lambda-ignoring (op &aux (env (env-credential provider family)))
+                       (lambda-ignoring (op &aux (env (env-credential provider family endpoint)))
                          (if env
                              (make-credential env :env)
                              (make-credential "public" :public))))))))
@@ -3403,8 +3423,10 @@ drives (CONFIGURED-PROVIDER-INVENTORY, CONFIGURED-PROVIDER-LANE), and each
 models.dev provider a lane drives whose own <ID>_API_KEY the environment
 sets."
   ;; Sorted ascending, like the inventory. The environment rung's SDK-family
-  ;; default is left out: OPENAI_API_KEY would connect DeepSeek, Moonshot and
-  ;; every other provider on the chat-completions wire. A saved key no lane
+  ;; default connects nothing: it rides only to its vendor's own endpoint
+  ;; (ENV-CREDENTIAL), and the vendors' providers name it as their own
+  ;; <ID>_API_KEY; counted here, OPENAI_API_KEY would connect DeepSeek,
+  ;; Moonshot and every other provider on the chat-completions wire. A saved key no lane
   ;; speaks connects nothing: auth.json keys for google-vertex and
   ;; google-vertex-anthropic, whose packages no lane serves, would make the
   ;; /models list ask where their credential comes from, which signals, and
