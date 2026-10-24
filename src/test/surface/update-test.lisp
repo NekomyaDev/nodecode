@@ -95,6 +95,30 @@ repo's own installer, for BODY."
     (is-values (version reason) (nle::latest-release)
       (version null) ((search "HTTP 404" reason) is))))
 
+(deftest update-a-release-label-never-names-a-folder-above-its-own ()
+  ;; A label becomes a folder under the release directory that a reinstall
+  ;; replaces whole: `.' or `..' named that directory or its parent.
+  (with-saved-globals ((nle::*release-fetch* (on-url "..")))
+    (is-values (version reason) (nle::latest-release)
+      (version null) ((search "names no version" reason) is)))
+  (is-carrying (text (refusal-text nlk:upgrade-refusal (nle::release-target "..")))
+    (".. is not a release label" "a label the operator names is refused by the same rule"))
+  (dolist (label (list "." ".." ".hidden" "../up" "a/b" "a\\b" "" (format nil "t~Cst" (code-char 233))))
+    (is (not (nle::release-label-p label)) label))
+  (dolist (label '("2ec27b3f4" "tv1" "0.0.1+2ec27b3f4" "beta-9_x"))
+    (is (nle::release-label-p label) label)))
+
+(deftest update-a-release-host-is-https-or-a-folder ()
+  ;; Over plain http anyone on the path could swap the pointer, the tarball
+  ;; and its sidecar; install.sh and install.ps1 refuse such a host the same way.
+  (is-values (body reason) (nle::release-fetch "http://127.0.0.1:9/dl/stable-x86_64-linux")
+    (body null) ((search "https://" reason) is))
+  (is (nle::release-host-p "https://nodecode.ai/dl"))
+  (is (nle::release-host-p "file:///srv/releases"))
+  (is (not (nle::release-host-p "http://nodecode.ai/dl")))
+  (with-saved-globals ((nle::*installed-build* t) (nle::*release-url* "http://mirror.example/dl"))
+    (is (equal "off" (nth-value 4 (nle::update-settings))) "an http host gets no feed")))
+
 (deftest update-reads-a-release-host-that-is-a-folder (with-release-host (dist nil))
   ;; The installer takes a file:// host; without this, the organism would read
   ;; it as a socket.

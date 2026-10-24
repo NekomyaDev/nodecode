@@ -116,13 +116,31 @@ definitions past it, then the build's number with the new label."
 
 ;;; --- the release host ------------------------------------------------------
 
+(defun release-host-p (url)
+  "Whether URL may serve releases: https://, or a folder as file://. Over
+plain http anyone on the path could hand over another pointer, another
+tarball and the sha256 sidecar that matches it; install.sh and install.ps1
+refuse such a host by this same rule."
+  (or (uiop:string-prefix-p "https://" url) (uiop:string-prefix-p "file://" url)))
+
+(defun release-label-p (label)
+  "Whether LABEL can name a release: 1 to 63 of ASCII letters, digits and
+._-+, never starting with a dot. A label becomes a folder under the release
+directory that a reinstall replaces whole, so `.' or `..' would name that
+directory or its parent. install.sh and install.ps1 hold the same rule."
+  (and (stringp label) (< 0 (length label) 64) (char/= (char label 0) #\.)
+       (every (lambda (c) (and (< (char-code c) 128) (or (alphanumericp c) (find c "._-+"))))
+              label)))
+
 (defun release-fetch (url &key (timeout 20))
   "GET URL as text => the body, or (values NIL REASON). A file:// URL, a
-release host that is a folder as the installer takes one, reads the file."
+release host that is a folder as the installer takes one, reads the file;
+a host RELEASE-HOST-P refuses is not asked."
   (multiple-value-bind (body reason)
-      (if (uiop:string-prefix-p "file://" url)
-          (or (ignore-errors (uiop:read-file-string (subseq url 7))) (values nil "no such file"))
-          (http-fetch url :timeout timeout))
+      (cond ((uiop:string-prefix-p "file://" url)
+             (or (ignore-errors (uiop:read-file-string (subseq url 7))) (values nil "no such file")))
+            ((release-host-p url) (http-fetch url :timeout timeout))
+            (t (values nil "a release host is https:// or a folder (file://)")))
     (if body (nlk:body-text body) (values nil reason))))
 
 (defvar *release-fetch* 'release-fetch
@@ -136,8 +154,7 @@ NIL REASON)."
          ((text reason) (funcall *release-fetch* url))
          (version (and (stringp text)
                        (nlk:trimmed text))))
-    (if (and version (plusp (length version)) (< (length version) 64)
-             (every (lambda (c) (or (alphanumericp c) (find c "._-+"))) version))
+    (if (release-label-p version)
         version
         (values nil (format nil "~a: ~a" url (or reason "names no version"))))))
 
@@ -260,7 +277,7 @@ the release host and the feed's host unless it says otherwise."
          (feed (string-right-trim "/" (or (getf settings :feed) "")))
          ;; a host that is a folder holds no feed: one read as a socket
          ;; would print SB-BSD-SOCKETS::ADDRESS (NIL NIL)
-         (feed (cond ((plusp (length feed)) feed) ((ppcre:scan "^https?://" url) url) (t "off"))))
+         (feed (cond ((plusp (length feed)) feed) ((uiop:string-prefix-p "https://" url) url) (t "off"))))
     (values (or (getf settings :mode) (if *installed-build* "auto" "off"))
             (getf settings :channel)
             (or (getf settings :check-minutes) (if (and (feed-streams-p) (string/= feed "off")) 360 30))
@@ -286,7 +303,10 @@ when set -- a mirror of the operator's own -- else *RELEASE-URL*."
 
 (defun release-target (version &aux (channel (nth-value 1 (update-settings))))
   "The release an update moves to: VERSION, else the configured channel's
-latest; refuses (UPGRADE-REFUSAL) when neither names one."
+latest; refuses (UPGRADE-REFUSAL) when neither names one, or VERSION is no
+release label (RELEASE-LABEL-P)."
+  (when (and version (not (release-label-p version)))
+    (nlk::upgrade-fail "~a is not a release label" version))
   (or version
       (multiple-value-bind (latest reason) (latest-release :channel channel)
         (or latest

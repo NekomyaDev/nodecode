@@ -190,3 +190,31 @@ if floor focal 'ldd (Ubuntu GLIBC 2.31-0ubuntu9.16) 2.31'; then fail 'glibc 2.31
 grep -q 'glibc 2.31 is too old .* needs 2.34 or newer' "$root/output-glibc-focal" || fail 'the refusal did not name 2.34'
 grep -q 'downloading' "$root/output-glibc-focal" && fail 'glibc 2.31 downloaded before the refusal'
 printf '%s\n' 'install-test: glibc 2.35 installs, 2.31 is refused before the download'
+
+# --- a release is installed only as its host vouches for it ------------------
+# The sha256 sidecar was optional: a host that served none had its tarball
+# installed after a WARNING, so whoever could serve the tarball needed no
+# sidecar to go with it. Its absence now stops the install before anything is
+# laid out. Plain http is refused before anything is read, and a label that is
+# not one -- `..' made the reinstall's folder the install root's parent --
+# never reaches the download.
+release="$root/vouch"; mkdir -p "$release"
+cp -r "$root/release/nodecode-test-x86_64-linux" "$release/nodecode-bare-x86_64-linux"
+tar -czf "$release/nodecode-bare-x86_64-linux.tar.gz" -C "$release" nodecode-bare-x86_64-linux
+vouch() { # NAME VERSION BASE
+  PATH="$fake_bin:$PATH" HOME="$bare" NODECODE_HOME="$root/install-vouch" NODECODE_VERSION="$2" \
+  NODECODE_BASE_URL="$3" sh "$(dirname "$0")/install.sh" --no-modify-path > "$root/output-vouch-$1" 2>&1
+}
+vfail() { printf 'install-test: %s\n' "$1" >&2; cat "$root"/output-vouch-* >&2; exit 1; }
+if vouch nosum bare "file://$release"; then vfail 'a release with no sha256 sidecar installed'; fi
+grep -q 'no sha256 is published for' "$root/output-vouch-nosum" || vfail 'the refusal did not name the missing sha256'
+[ ! -e "$root/install-vouch/bare" ] || vfail 'a release with no sha256 sidecar was laid out'
+if vouch http test "http://127.0.0.1:9/dl"; then vfail 'a plain http release host was taken'; fi
+grep -q 'NODECODE_BASE_URL is https:// or file://' "$root/output-vouch-http" || vfail 'the http refusal did not name the rule'
+grep -q 'downloading' "$root/output-vouch-http" && vfail 'a plain http release host was read'
+for label in .. . ../up a/b; do
+  if vouch label "$label" "file://$root/release"; then vfail "the label $label was installed"; fi
+  grep -q "NODECODE_VERSION is not a release label: $label" "$root/output-vouch-label" || vfail "the label $label was not refused as one"
+  grep -q 'downloading' "$root/output-vouch-label" && vfail "the label $label reached the download"
+done
+printf '%s\n' 'install-test: no sha256 sidecar, a plain http host or a label like .. is refused before anything is laid out'

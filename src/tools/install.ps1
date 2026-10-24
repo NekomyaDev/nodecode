@@ -66,6 +66,13 @@ param(
 )
 
 $baseUrl = if ($env:NODECODE_BASE_URL) { $env:NODECODE_BASE_URL } else { 'https://nodecode.ai/dl' }
+# The release host is https:// or a folder (file://), and nothing else: the
+# rule the organism's own update check holds too (update.lisp,
+# RELEASE-HOST-P). Over plain http anyone on the path could hand over another
+# pointer, another archive and the sha256 sidecar that matches it.
+if ($baseUrl -notmatch '^(https|file)://') {
+  throw "NODECODE_BASE_URL is https:// or file:// (got $baseUrl): over plain http anyone on the path could swap the release"
+}
 $channel = if ($env:NODECODE_CHANNEL) { $env:NODECODE_CHANNEL } else { 'stable' }
 $root = if ($env:NODECODE_INSTALL_DIR) { $env:NODECODE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\nodecode' }
 
@@ -80,7 +87,7 @@ function Get-ChannelVersion {
   # be an answer from before this file existed - or a label that has moved.
   $pointer = "$baseUrl/$channel-x86_64-windows"
   $read = $pointer
-  if ($baseUrl -match '^https?:') { $read = "$pointer`?cb=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" }
+  if ($baseUrl -match '^https:') { $read = "$pointer`?cb=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())" }
   # The host serves the pointer as application/octet-stream, and for that type
   # Invoke-WebRequest hands back the body as bytes, not text: .Trim() on it
   # threw, and every Windows install read "no release is published".
@@ -101,6 +108,13 @@ if (-not $Version -and -not $FromZip) {
   if ($env:NODECODE_VERSION) { $Version = $env:NODECODE_VERSION }
   elseif ($stage -eq 'link') { throw 'a link needs the version to point at: set NODECODE_VERSION' }
   else { $Version = Get-ChannelVersion }
+}
+# A label becomes a folder under $root that a reinstall replaces whole, so
+# '.' or '..' would name the install folder or its parent: a label is 1 to 63
+# of letters, digits and ._+-, never starting with a dot - update.lisp's
+# RELEASE-LABEL-P, the rule a label the organism stages already passed.
+if ($Version -and $Version -cnotmatch '^[A-Za-z0-9_+-][A-Za-z0-9._+-]{0,62}$') {
+  throw "NODECODE_VERSION is not a release label: $Version"
 }
 # Two containers are published under one label: tar.zst, which bsdtar unpacks
 # in a fifth of the time over a quarter less wire, and the zip every release
@@ -197,15 +211,22 @@ function Get-Release {
       }
       throw "download failed: $url ($($_.Exception.Message))"
     }
-    try { Invoke-WebRequest -Uri "$url.sha256" -OutFile "$path.sha256" -UseBasicParsing } catch { Say 'no sha256 sidecar published; skipping the check' }
+    try { Invoke-WebRequest -Uri "$url.sha256" -OutFile "$path.sha256" -UseBasicParsing }
+    catch { throw "no sha256 is published for ${url}: a release nothing vouches for is not installed" }
     return $path
   }
   throw "download failed: no archive of $Version at $baseUrl"
 }
 
 function Assert-Checksum([string]$zip) {
+  # A download is installed only against the sha256 its host published:
+  # Get-Release refuses one that has none. A -FromZip archive is the
+  # operator's own file, checked when a sidecar lies beside it.
   $sidecar = "$zip.sha256"
-  if (-not (Test-Path $sidecar)) { return }
+  if (-not (Test-Path $sidecar)) {
+    if ($FromZip) { Say "no sha256 beside $FromZip; the operator's own file is installed as it is"; return }
+    throw "no sha256 for ${zip}: a release nothing vouches for is not installed"
+  }
   $expected = ((Get-Content $sidecar -Raw) -split '\s+')[0].ToLower()
   $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
   if ($expected -ne $actual) { throw "sha256 mismatch for ${zip}: expected $expected, got $actual" }

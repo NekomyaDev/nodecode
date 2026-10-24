@@ -7,7 +7,7 @@
 #
 # Fetches the release tarball for this machine — x86_64 Linux, Apple Silicon
 # macOS — checks it against the sha256
-# the release carries, and lays it out under ~/.local/share/nodecode/<version>/
+# the release carries (no sidecar, no install), and lays it out under ~/.local/share/nodecode/<version>/
 # — the executable and src/, which must stay together: SOURCE-ROOT resolves
 # <runtime-directory>/src/src/, so that directory is the organism's own view of
 # itself, not an install artifact. A stable `current` symlink points at the
@@ -30,7 +30,8 @@
 #
 #   NODECODE_VERSION   install this version instead of the one the channel names
 #   NODECODE_CHANNEL   the channel whose pointer to read (default: stable)
-#   NODECODE_BASE_URL  fetch from here instead of the release host
+#   NODECODE_BASE_URL  fetch from here instead of the release host: https://,
+#                      or a folder as file://
 #   NODECODE_HOME      install here instead of ~/.local/share/nodecode
 #   NODECODE_STAGE     full (the default), stage or link -- see below
 #   --no-modify-path   leave ~/.local/bin alone and print what to add
@@ -70,6 +71,15 @@ have() { command -v "$1" >/dev/null 2>&1; }
 case "$STAGE" in
   full|stage|link) ;;
   *) die "NODECODE_STAGE is full, stage or link (got $STAGE)" ;;
+esac
+
+# The release host is https:// or a folder (file://), and nothing else: the
+# rule the organism's own update check holds too (update.lisp,
+# RELEASE-HOST-P). Over plain http anyone on the path could hand over another
+# pointer, another tarball and the sha256 sidecar that matches it.
+case "$BASE_URL" in
+  https://*|file://*) ;;
+  *) die "NODECODE_BASE_URL is https:// or file:// (got $BASE_URL): over plain http anyone on the path could swap the release" ;;
 esac
 
 # --- what this machine is ---------------------------------------------------
@@ -193,6 +203,16 @@ have git || say "WARNING: git is not installed — nodecode commits its layers,
 # by label, and a human re-installing a known build says so here. Anything else
 # asks the channel.
 VERSION="${NODECODE_VERSION:-}"
+# A label becomes a folder under $HOME_DIR that a reinstall replaces whole, so
+# `.' or `..' would name the install root or its parent: a label is 1 to 63
+# of letters, digits and ._+-, never starting with a dot -- update.lisp's
+# RELEASE-LABEL-P, the rule a label the organism stages already passed.
+if [ -n "$VERSION" ]; then
+  case "$VERSION" in
+    .*|*[!A-Za-z0-9._+-]*) die "NODECODE_VERSION is not a release label: $VERSION" ;;
+  esac
+  [ "${#VERSION}" -lt 64 ] || die "NODECODE_VERSION is not a release label: $VERSION"
+fi
 if [ -z "$VERSION" ]; then
   if [ "$STAGE" = link ]; then
     die "--link needs the version to point at: set NODECODE_VERSION"
@@ -206,7 +226,7 @@ if [ -z "$VERSION" ]; then
   # that is current now.
   pointer_read="$pointer_url"
   case "$BASE_URL" in
-    http://*|https://*) pointer_read="$pointer_url?cb=$(date +%s)" ;;
+    https://*) pointer_read="$pointer_url?cb=$(date +%s)" ;;
   esac
   say "reading $pointer_url"
   if have curl; then
@@ -279,31 +299,31 @@ fi
 
 if [ "$STAGE" != link ] && [ "$reuse" = 0 ]; then
 
-say "downloading $url"
-if have curl; then
-  curl -fsSL "$url" -o "$work/$name.tar.gz" || die "download failed: $url"
-  curl -fsSL "$url.sha256" -o "$work/$name.tar.gz.sha256" 2>/dev/null || true
-else
-  wget -q "$url" -O "$work/$name.tar.gz" || die "download failed: $url"
-  wget -q "$url.sha256" -O "$work/$name.tar.gz.sha256" 2>/dev/null || true
-fi
-
 # coreutils on Linux, perl's shasum on macOS; both print `<hash>  <name>'.
+# A download is installed only against the sha256 its release published, so
+# a machine that cannot compute one stops here, before the download.
 if have sha256sum; then
   sha256() { sha256sum "$1"; }
 elif have shasum; then
   sha256() { shasum -a 256 "$1"; }
 else
-  sha256() { return 1; }
+  die "neither sha256sum nor shasum is installed, so the download cannot be checked"
 fi
-if [ -s "$work/$name.tar.gz.sha256" ] && sha256 "$work/$name.tar.gz" >/dev/null 2>&1; then
-  want="$(cut -d' ' -f1 < "$work/$name.tar.gz.sha256")"
-  got="$(sha256 "$work/$name.tar.gz" | cut -d' ' -f1)"
-  [ "$want" = "$got" ] || die "sha256 mismatch: expected $want, got $got"
-  say "sha256 verified"
+
+say "downloading $url"
+nosum="no sha256 is published for $url: a release nothing vouches for is not installed"
+if have curl; then
+  curl -fsSL "$url" -o "$work/$name.tar.gz" || die "download failed: $url"
+  curl -fsSL "$url.sha256" -o "$work/$name.tar.gz.sha256" 2>/dev/null || die "$nosum"
 else
-  say "WARNING: no sha256 sidecar published; skipping the check"
+  wget -q "$url" -O "$work/$name.tar.gz" || die "download failed: $url"
+  wget -q "$url.sha256" -O "$work/$name.tar.gz.sha256" 2>/dev/null || die "$nosum"
 fi
+[ -s "$work/$name.tar.gz.sha256" ] || die "$nosum"
+want="$(cut -d' ' -f1 < "$work/$name.tar.gz.sha256")"
+got="$(sha256 "$work/$name.tar.gz" | cut -d' ' -f1)" || die "could not compute the sha256 of $name.tar.gz"
+[ -n "$got" ] && [ "$want" = "$got" ] || die "sha256 mismatch: expected $want, got $got"
+say "sha256 verified"
 
 # --- lay it out -------------------------------------------------------------
 
