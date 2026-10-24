@@ -258,27 +258,33 @@ they spell, with room left for the escape that follows them."
            (share (if narrow
                       (replace (make-string filled :element-type 'base-char) buffer)
                       (subseq buffer 0 filled))))
-         (read-code (&aux (code 0))
-           ;; \\uXXXX, and the pair a character outside the basic plane is
-           ;; spelled with.
+         (read-hex4 (&aux (code 0))
            (loop repeat 4
                  for value = (and (< index end)
                                   (digit-char-p (code-char (aref octets index)) 16))
                  do (unless value (refuse "an escape wants four hex digits"))
                     (setf code (logior (ash code 4) value))
                     (incf index))
-           (if (<= #xd800 code #xdbff)
-               (progn
-                 (unless (and (< (1+ index) end)
-                              (= (aref octets index) #.(char-code #\\))
-                              (= (aref octets (1+ index)) #.(char-code #\u)))
-                   (refuse "a leading surrogate without its pair"))
-                 (incf index 2)
-                 (let ((tail (read-code)))
-                   (code-char (+ #x10000
-                                 (ash (- code #xd800) 10)
-                                 (- (char-code tail) #xdc00)))))
-               (code-char code)))
+           code)
+         (read-code (&aux (code (read-hex4)))
+           ;; \\uXXXX, and the pair a character outside the basic plane is
+           ;; spelled with. A surrogate stands only in a leading-then-trailing
+           ;; pair: a lone one, or a leading one followed by anything else, is
+           ;; a refusal rather than a character that was never written.
+           (cond
+             ((<= #xd800 code #xdbff)
+              (unless (and (< (1+ index) end)
+                           (= (aref octets index) #.(char-code #\\))
+                           (= (aref octets (1+ index)) #.(char-code #\u)))
+                (refuse "a leading surrogate without its pair"))
+              (incf index 2)
+              (let ((tail (read-hex4)))
+                (unless (<= #xdc00 tail #xdfff)
+                  (refuse "a leading surrogate followed by something that is not its pair"))
+                (code-char (+ #x10000 (ash (- code #xd800) 10) (- tail #xdc00)))))
+             ((<= #xdc00 code #xdfff)
+              (refuse "a trailing surrogate without its leading one"))
+             (t (code-char code))))
          (read-string ()
            ;; INDEX is at the opening quote. The common string carries no
            ;; escape, and is one copy straight out of the source bytes. A

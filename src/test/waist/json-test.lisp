@@ -582,6 +582,9 @@ write's four values."
     (is (= #x1f600 (char-code (char astral 0))) "the character it spells")
     (is-table (text) (signals-error nlk:json-refusal (nlk:decode-json text))
       ("\"\\ud83d\"" "a leading surrogate without its pair is a refusal")
+      ("\"\\ud800\\u0041\"" "a leading surrogate before a plain escape is a refusal")
+      ("\"\\ud800\\ud800\"" "a leading surrogate before another is a refusal")
+      ("\"\\udc00\"" "a lone trailing surrogate is a refusal")
       ("\"\\q\"" "an escape that is not one is a refusal")
       ((format nil "\"a~cb\"" #\Newline) "a raw control character inside a string is a refusal"))))
 
