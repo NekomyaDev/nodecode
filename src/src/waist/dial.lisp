@@ -265,12 +265,16 @@ STATUS HEADERS TRUNCATED-P)."
   ;; wall clock: BODY is an octet vector, TRUNCATED-P true when the wire had
   ;; more. A failed status's streamed BODY is its text, the first 2 KiB of it.
   ;; POOL keeps the connection (localhost control and platform REST reuse
-  ;; theirs), PROXY names one.
+  ;; theirs), PROXY names one. Without POOL the exchange asks the peer to
+  ;; close: dexador hands a kept-alive connection back to its caller to close
+  ;; or pool, and before a refused status it hands it to nobody, so one kept
+  ;; alive here would sit in CLOSE-WAIT, a descriptor per exchange, until the
+  ;; process can open no file at all.
   (handler-case
       (bind (((body status response-headers _ socket)
               (dex:request url :method method :headers headers :content content
                                :connect-timeout connect-timeout :read-timeout timeout
-                               :max-redirects 5 :use-connection-pool pool
+                               :max-redirects 5 :use-connection-pool pool :keep-alive (and pool t)
                                :proxy (or proxy dex:*default-proxy*)
                                :want-stream (or stream (and max-bytes t))
                                :force-binary (or binary (and max-bytes t)))))

@@ -141,6 +141,30 @@ LISTEN-HOST took, both closed on the way out."
             (is (eq :failed (bt2:join-thread client)) "the handshake fails")
             (is (eq :closed (handler-case (sb-sys:with-deadline (:seconds 5) (loop while (read-byte stream nil nil)) :closed) (sb-sys:deadline-timeout () :still-open) (stream-error () :closed))) "the client's socket closed (or reset) with its handshake")))))))
 
+(deftest dial-http-without-a-pool-leaves-no-connection-open ()
+  ;; A peer that answers keep-alive and then waits: NLK:HTTP without POOL must
+  ;; end the connection once the answer is in, for a 200 and for a refused
+  ;; status alike, which the peer reads as the end of the stream. A connection
+  ;; left open is a descriptor held until the peer gives up, and then one in
+  ;; CLOSE-WAIT for as long as the process lives.
+  (dolist (status '(200 404))
+    (let ((listener (usocket:socket-listen "127.0.0.1" 0 :reuse-address t :element-type '(unsigned-byte 8))))
+      (nlk:with-cleanup ((usocket:socket-close listener))
+        (let* ((url (format nil "http://127.0.0.1:~d/" (usocket:get-local-port listener)))
+               (client (bt2:make-thread (lambda () (handler-case (nth-value 1 (nlk:http :get url :timeout 5)) (error () :failed)))
+                                        :name "http without a pool"))
+               (peer (usocket:socket-accept listener :element-type '(unsigned-byte 8))))
+          (nlk:with-cleanup ((usocket:socket-close peer))
+            (let ((stream (usocket:socket-stream peer)))
+              (loop with tail = '() for byte = (read-byte stream nil nil)
+                    while byte
+                    do (setf tail (last (append tail (list byte)) 4))
+                    until (equal tail '(13 10 13 10)))
+              (write-sequence (sb-ext:string-to-octets (format nil "HTTP/1.1 ~d X~C~CContent-Length: 2~C~C~C~Cok" status #\Return #\Newline #\Return #\Newline #\Return #\Newline) :external-format :latin-1) stream)
+              (finish-output stream)
+              (is (eql status (bt2:join-thread client)) (format nil "the ~d answer comes back as a value" status))
+              (is (eq :closed (handler-case (sb-sys:with-deadline (:seconds 3) (loop while (read-byte stream nil nil)) :closed) (sb-sys:deadline-timeout () :still-open) (stream-error () :closed))) (format nil "after a ~d the client's connection is closed, not kept" status)))))))))
+
 (deftest dial-client-contexts-share-one-store-per-verify-mode ()
   ;; Every HTTPS connection dexador opens asks for a context: at the default
   ;; location it is one per verify mode, and a caller's free leaves it whole.
