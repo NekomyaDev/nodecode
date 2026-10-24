@@ -3,7 +3,11 @@
 ;;;; SPDX-License-Identifier: MIT
 ;;;;
 ;;;; Whole-tree workspace capture into a bare shadow repository at
-;;;; <workspace>/.nodecode/workspace_snapshots, driven through the git CLI.
+;;;; <home>/snapshots/<key>/, KEY the digest of the workspace's canonical path,
+;;;; driven through the git CLI. The store sits outside every work tree: git
+;;;; reads a repository's config, hooks and attributes from its own folder,
+;;;; so a store inside the workspace is one a cloned repo could ship, and its
+;;;; core.fsmonitor or a filter driver would run at the first capture.
 ;;;; Content addressing makes unchanged captures free (same tree sha) and
 ;;;; dedups blobs across sessions; the repack lane compacts loose objects
 ;;;; into packfile delta chains so history costs deltas, not copies.
@@ -26,9 +30,7 @@
 ;;;; Limitations (by design, documented): writes outside the session's
 ;;;; recorded cwd are not snapshotted (EVAL has full host authority and
 ;;;; may write anywhere); a thread writing during restore races the hash
-;;;; guard (same TOCTOU exposure as the Zig store). Nothing here ensures the
-;;;; operator's own repo gitignores /.nodecode/ — the store may appear in
-;;;; their git status.
+;;;; guard (same TOCTOU exposure as the Zig store).
 
 
 (in-package #:nodecode.kernel)
@@ -146,9 +148,14 @@ SAVE-LISP-AND-DIE or fork."
   "Run one git plumbing call under the isolation prefix and a walltime bound."
   ;; Returns stdout as a string; any exit but 0 signals the snapshot condition
   ;; taxonomy.
+  ;;
+  ;; core.fsmonitor is the one driver a plain ADD runs that configuration
+  ;; alone switches on, and configuration can still arrive from this
+  ;; process's environment (GIT_CONFIG_PARAMETERS): the empty value turns it
+  ;; off on every git that reads it, as a bool or as a hook path.
   (multiple-value-bind (output error-output status)
       (handler-case
-          (run-bounded (cons *git-program* args)
+          (run-bounded (list* *git-program* "-c" "core.fsmonitor=" args)
                        :seconds +snapshot-git-timeout-seconds+
                        :environment (snapshot-git-environment
                                      store :with-work-tree with-work-tree)
@@ -186,11 +193,9 @@ SAVE-LISP-AND-DIE or fork."
 
 (defun write-store-exclude (store)
   (with-output-file (stream (snapshot-store-file store "info/exclude"))
-    ;; The store must never stage its own objects, and an undo must never
-    ;; roll back the event log that recorded it — hence the sqlite patterns
-    ;; (Zig parity) and the organism's own state dir.
-    (dolist (line (list "/.nodecode/workspace_snapshots/"
-                        "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.sqlite-journal"
+    ;; An undo must never roll back the event log that recorded it — hence
+    ;; the sqlite patterns (Zig parity) and the organism's own state dir.
+    (dolist (line (list "*.sqlite" "*.sqlite-wal" "*.sqlite-shm" "*.sqlite-journal"
                         "/.nodecode/"))
       (write-line line stream))
     ;; The live sqlite store when its path resolves under the workspace (a
@@ -204,62 +209,70 @@ SAVE-LISP-AND-DIE or fork."
             (dolist (suffix '("" "-wal" "-shm" "-journal" ".lock" ".owner"))
               (format stream "/~a~a~%" (subseq db (length root)) suffix))))))))
 
+(defun snapshot-git-dir (workspace)
+  "The shadow store's git directory for WORKSPACE, a canonical directory
+namestring: a folder of the home named by the digest of that path."
+  ;; One store per workspace per home: a home's events name trees of its own
+  ;; store. Two spellings of one folder (a symlink, a relative path) are one
+  ;; canonical path, hence one store.
+  (home (format nil "snapshots/~a/" (subseq (sha256-text workspace) 7 39))))
+
 (defun ensure-snapshot-store (workspace session-id)
   "Open (initializing when absent) the shadow store for WORKSPACE/SESSION-ID."
   ;; => (values SNAPSHOT-STORE-or-NIL unavailable-keyword-or-NIL). Never signals.
   (with-handlers ((snapshot-git-unavailable () (values nil :git-missing))
                   (error () (values nil :store-init-failed)))
-    (let* ((root (uiop:ensure-directory-pathname workspace))
-           ;; the Zig store's path: content-addressed, per-session indexes, both coexist
-           (git-dir (merge-pathnames ".nodecode/workspace_snapshots/" root))
-           (store (make-snapshot-store
-                   :workspace (namestring root)
-                   :git-dir (string-right-trim "/" (namestring git-dir))
-                   :index-path (namestring
-                                (merge-pathnames
-                                 (format nil "index-~a" session-id) git-dir)))))
-      (cond
-        ((not (git-available-p)) (values nil :git-missing))
-        ((not (uiop:directory-exists-p root)) (values nil :store-init-failed))
-        ;; $HOME and a filesystem root are never a workspace to stage:
-        ;; refused before any git runs, and recorded as the reason. The
-        ;; account's home too, whatever $HOME this image was handed: a scratch
-        ;; $HOME does not make the real one a workspace.
-        ((flet ((canonical (path)
-                  (ignore-errors
-                   (namestring (uiop:ensure-directory-pathname (truename path))))))
-           (let ((workspace (canonical root)))
-             (or (null workspace)
-                 (equal workspace (canonical (user-homedir-pathname)))
-                 (let ((account (account-home)))
-                   (and account (equal workspace (canonical account))))
-                 ;; no directory, or the filesystem root alone
-                 (null (rest (pathname-directory workspace))))))
-         (values nil :workspace-too-large))
-        (t
-         ;; An index lock older than RUN-SNAPSHOT-GIT's walltime bound was left
-         ;; by a process that died mid-walk; a younger one may be a capture.
-         (let* ((lock (concatenate 'string (snapshot-store-index-path store) ".lock"))
-                (age (and (probe-file lock)
-                          (ignore-errors (- (get-universal-time) (file-write-date lock))))))
-           (when (and (integerp age) (> age +snapshot-git-timeout-seconds+))
-             (ignore-errors (delete-file lock))))
-         (unless (uiop:directory-exists-p git-dir)
-           (ensure-directories-exist git-dir)
-           ;; git refuses init under GIT_WORK_TREE; config runs bare too.
-           (run-snapshot-git store (list "init" "--bare" "--quiet")
-                             :with-work-tree nil)
-           ;; gc.auto=0 is load-bearing: an auto-gc between capture and
-           ;; undo could prune a tree the undo needs.
-           (loop for (key value) in '(("core.bare" "false")
-                                      ("gc.auto" "0")
-                                      ("core.untrackedCache" "true")
-                                      ("index.version" "4")
-                                      ("core.symlinks" "true"))
-                 do (run-snapshot-git store (list "config" key value)
-                                      :with-work-tree nil)))
-         (write-store-exclude store)
-         (values store nil))))))
+    (flet ((canonical (path)
+             (ignore-errors
+              (namestring (uiop:ensure-directory-pathname (truename path))))))
+      (let* ((root (uiop:ensure-directory-pathname workspace))
+             (canonical-root (canonical root)))
+        (cond
+          ((not (git-available-p)) (values nil :git-missing))
+          ((not (uiop:directory-exists-p root)) (values nil :store-init-failed))
+          ;; $HOME and a filesystem root are never a workspace to stage:
+          ;; refused before any git runs, and recorded as the reason. The
+          ;; account's home too, whatever $HOME this image was handed: a
+          ;; scratch $HOME does not make the real one a workspace.
+          ((or (null canonical-root)
+               (equal canonical-root (canonical (user-homedir-pathname)))
+               (let ((account (account-home)))
+                 (and account (equal canonical-root (canonical account))))
+               ;; no directory, or the filesystem root alone
+               (null (rest (pathname-directory canonical-root))))
+           (values nil :workspace-too-large))
+          (t (open-snapshot-store root (snapshot-git-dir canonical-root) session-id)))))))
+
+(defun open-snapshot-store (root git-dir session-id)
+  "The store over the workspace ROOT kept in GIT-DIR, with SESSION-ID's index,
+initializing GIT-DIR when absent: ENSURE-SNAPSHOT-STORE's last step, past its
+refusals."
+  (let ((store (make-snapshot-store
+                :workspace (namestring root)
+                :git-dir (string-right-trim "/" (namestring git-dir))
+                :index-path (namestring
+                             (merge-pathnames (format nil "index-~a" session-id) git-dir)))))
+    ;; An index lock older than RUN-SNAPSHOT-GIT's walltime bound was left by
+    ;; a process that died mid-walk; a younger one may be a capture.
+    (let* ((lock (concatenate 'string (snapshot-store-index-path store) ".lock"))
+           (age (and (probe-file lock)
+                     (ignore-errors (- (get-universal-time) (file-write-date lock))))))
+      (when (and (integerp age) (> age +snapshot-git-timeout-seconds+))
+        (ignore-errors (delete-file lock))))
+    (unless (uiop:directory-exists-p git-dir)
+      (ensure-directories-exist git-dir)
+      ;; git refuses init under GIT_WORK_TREE; config runs bare too.
+      (run-snapshot-git store (list "init" "--bare" "--quiet") :with-work-tree nil)
+      ;; gc.auto=0 is load-bearing: an auto-gc between capture and undo could
+      ;; prune a tree the undo needs.
+      (loop for (key value) in '(("core.bare" "false")
+                                 ("gc.auto" "0")
+                                 ("core.untrackedCache" "true")
+                                 ("index.version" "4")
+                                 ("core.symlinks" "true"))
+            do (run-snapshot-git store (list "config" key value) :with-work-tree nil)))
+    (write-store-exclude store)
+    (values store nil)))
 
 ;;; --- capture and anchor --------------------------------------------------
 

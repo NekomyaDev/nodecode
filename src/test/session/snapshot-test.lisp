@@ -10,7 +10,8 @@
 ;;;;        per path, and -z parsing survives spaces in names.
 ;;;;   SN4. A foreign write is skipped and reported, never clobbered; a path
 ;;;;        the session never wrote restores without a claim.
-;;;;   SN5. The store excludes itself and sqlite state from capture.
+;;;;   SN5. The store lives outside the work tree; sqlite state and a
+;;;;        workspace's own .nodecode/ stay out of capture.
 ;;;;   SN6. Two sessions share objects but never an index file.
 ;;;;   SN7. Unavailability degrades: no git means no store, and the durable
 ;;;;        capture fact still records with an unavailable-reason.
@@ -34,9 +35,9 @@
   (when (probe-file path)
     (uiop:read-file-string path)))
 
-(defun %store-file (dir name)
-  "NAME inside DIR's shadow snapshot store."
-  (merge-pathnames (concatenate 'string ".nodecode/workspace_snapshots/" name) dir))
+(defun %store-file (store name)
+  "NAME inside STORE's shadow git directory."
+  (nlk::snapshot-store-file store name))
 
 (defun %anchored-capture (store label &aux (sha (nlk:capture-workspace-tree store)))
   "Capture STORE's workspace tree, anchor it under LABEL, and answer its sha."
@@ -85,8 +86,8 @@ completed once BODY is done."
 
 (deftest snapshot-store-initializes-bare-with-pinned-config (with-git-workspace (store dir))
   (is (nlk:snapshot-store-p store) "store opens")
-  (is (probe-file (%store-file dir "config")))
-  (let ((config (uiop:read-file-string (%store-file dir "config"))))
+  (is (probe-file (%store-file store "config")))
+  (let ((config (uiop:read-file-string (%store-file store "config"))))
     (is (search "bare = false" config) "core.bare false")
     ;; gc.auto=0 is load-bearing: auto-gc between capture and undo
     ;; could prune a tree the undo needs.
@@ -251,13 +252,47 @@ completed once BODY is done."
 
 (deftest snapshot-excludes-own-store-and-sqlite-patterns (with-git-workspace (store dir))
   (%write-file dir "real.txt" "content" "state.sqlite" "not captured"
-               "state.sqlite-wal" "not captured")
+               "state.sqlite-wal" "not captured" ".nodecode/state" "not captured")
+  (is (not (nlk::path-within-p (nlk:snapshot-store-git-dir store)
+                               (string-right-trim "/" (namestring dir)))) "the store lives outside the work tree it captures")
   (let ((sha (nlk:capture-workspace-tree store)))
     (is (stringp (nlk:hash-in-tree store sha "real.txt")))
     (is-table (path) (null (nlk:hash-in-tree store sha path))
       ("state.sqlite" "sqlite file excluded")
       ("state.sqlite-wal" "sqlite sidecar excluded")
-      (".nodecode/workspace_snapshots/config" "the store never captures itself"))))
+      (".nodecode/state" "a workspace's own .nodecode/ excluded"))))
+
+(deftest a-work-tree-cannot-ship-the-snapshot-store ()
+  ;; SN5. A cloned repo may carry .nodecode/workspace_snapshots/ -- the folder
+  ;; the store once lived in -- as a whole bare repository whose config names
+  ;; an fsmonitor hook and a clean filter its .gitattributes switches on, both
+  ;; a program git runs at the first ADD. The store is the home's: nothing the
+  ;; work tree ships is read as its configuration, and the capture lands.
+  (with-temp-directory (outside "planted-driver")
+    (with-temp-directory (dir "planted")
+      (let ((planted (merge-pathnames ".nodecode/workspace_snapshots/" dir))
+            (driver (merge-pathnames "driver" outside))
+            (ran (merge-pathnames "ran" outside)))
+        (when (nlk:git-available-p)
+          (ensure-directories-exist planted)
+          (uiop:run-program (list nlk::*git-program* "init" "--bare" "--quiet"
+                                  (namestring planted)))
+          (write-temp-file driver (format nil "#!/bin/sh~%echo \"$0 $*\" >> '~a'~%cat~%"
+                                          (namestring ran)))
+          #-win32 (sb-posix:chmod (namestring driver) #o755)
+          (with-open-file (config (merge-pathnames "config" planted)
+                                  :direction :output :if-exists :append)
+            (format config "[core]~%~cfsmonitor = ~a~%[filter \"planted\"]~%~cclean = ~a~%"
+                    #\Tab (namestring driver) #\Tab (namestring driver)))
+          (%write-file dir ".gitattributes" (format nil "* filter=planted~%") "a.txt" "one"))
+        (let ((store (nlk:ensure-snapshot-store (namestring dir) "planted")))
+          (cond ((nlk:git-available-p)
+                 (is (nlk:snapshot-store-p store) "a store opens over the work tree")
+                 (let ((sha (nlk:capture-workspace-tree store)))
+                   (is (stringp (nlk:hash-in-tree store sha "a.txt")) "the capture lands")
+                   (is (null (nlk:hash-in-tree store sha ".nodecode/workspace_snapshots/config")) "the planted store is not captured as content either"))
+                 (is (null (probe-file ran)) "no hook or filter the work tree shipped ran"))
+                (t (is (null store) "git unavailable: ensure degrades to nil"))))))))
 
 (deftest snapshot-per-session-index-isolation ()
   (with-git-workspace (store-a dir :session-id "session-a")
@@ -265,8 +300,8 @@ completed once BODY is done."
       (%write-file dir "shared.txt" "same bytes")
       (is (equal (nlk:capture-workspace-tree store-a)
                  (nlk:capture-workspace-tree store-b)) "same workspace, same content address")
-      (is (probe-file (%store-file dir "index-session-a")))
-      (is (probe-file (%store-file dir "index-session-b"))))))
+      (is (probe-file (%store-file store-a "index-session-a")))
+      (is (probe-file (%store-file store-a "index-session-b"))))))
 
 (deftest snapshot-unavailable-degrades-and-still-records-fact (with-temp-store (store))
   (with-snapshot-workspace (snapshot-store dir)
@@ -296,7 +331,7 @@ completed once BODY is done."
     (%write-file dir "file.txt" "version three")
     (let ((head (%anchored-capture store "v3")))
       (is (nlk:repack-store store) "repack succeeds")
-      (is (probe-file (%store-file dir "objects/pack/")))
+      (is (probe-file (%store-file store "objects/pack/")))
       ;; The oldest tree must still restore byte-identical from the pack.
       ;; Expectations claim the captured head state, as restores do.
       (let ((changes (nlk:changed-paths store oldest)))
@@ -305,7 +340,7 @@ completed once BODY is done."
     (is (equal "version one" (%read-file dir "file.txt")))))
 
 (deftest snapshot-repack-lock-contention-skips (with-git-workspace (store dir))
-  (let ((lock-path (%store-file dir "repack.lock")))
+  (let ((lock-path (%store-file store "repack.lock")))
     ;; A fresh lock held by someone else: acquisition must fail.
     (write-temp-file lock-path (format nil "99999~%"))
     (is (null (nlk::acquire-repack-lock store)))
