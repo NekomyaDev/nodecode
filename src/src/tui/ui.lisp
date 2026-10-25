@@ -9636,14 +9636,19 @@ result breaks to, a blank, the muted context -- or NIL for a list body."
                    (connect-provider-name dialog)
                    (if (eq :signing-in (connect-dialog-step dialog))
                        ;; under the clock, where to sign in -- the page a link,
-                       ;; its query cut -- and the device code when there is
-                       ;; one; a command that answered no page says its words
+                       ;; its query cut, then the whole address verbatim and
+                       ;; dimmed when it carries more than the page -- and the
+                       ;; device code when there is one; a command that
+                       ;; answered no page says its words
                        (multiple-value-bind (url code) (sign-in-facts (connect-dialog-result-message dialog))
                          (if url
-                             (list* (list (make-seg :text (format nil "Sign in at ~a" (sign-in-page-label url))
-                                                    :tone :foreground :link url))
-                                    (and code (list (list (make-seg :text (format nil "Code ~a" code)
-                                                                    :tone :foreground :bold t)))))
+                             (append (list (list (make-seg :text (format nil "Sign in at ~a" (sign-in-page-label url))
+                                                           :tone :foreground :link url)))
+                                     (when (find-if (lambda (c) (member c '(#\? #\#))) url)
+                                       (loop for piece in (wrapped-lines url room)
+                                             collect (list (make-seg :text piece :tone :muted :link url))))
+                                     (and code (list (list (make-seg :text (format nil "Code ~a" code)
+                                                                     :tone :foreground :bold t)))))
                              (loop for line in (split-lines (connect-dialog-result-message dialog))
                                    nconc (wrapped-lines line room))))
                        (rest lines))))))

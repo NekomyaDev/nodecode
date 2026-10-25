@@ -183,8 +183,9 @@
 (deftest connect-an-offered-provider-signs-in-in-the-wizard-then-goes-on-to-its-models ()
   ;; A folder that signs in with a command (Codex's /openai-codex login):
   ;; once it is in, the command runs, its page opens in the browser, and the
-  ;; wizard stays open on two lines -- where to sign in, the device code when
-  ;; there is one, none of the command's prose -- until the gateway's list
+  ;; wizard stays open on where to sign in, the whole address verbatim
+  ;; (dimmed), the device code when there is one, none of the command's
+  ;; prose -- until the gateway's list
   ;; reads the provider connected; then the pick goes on to its models. It
   ;; used to close the list and run the command, which ended a setup walk on
   ;; its summary with the address cut off in the status line.
@@ -220,12 +221,13 @@
                                           (setf seen (list (nle::connect-dialog-step (nle::chat-model-dialog m))
                                                            (rows-carry-p "Sign in at auth.example.test/authorize" frame)
                                                            (rows-carry-p "Code ABCD-1234" frame)
+                                                           (rows-carry-p address frame)
                                                            (rows-carry-p "Open this address" frame)
                                                            (rows-carry-p "browser runs elsewhere" frame)))))
                                       nil)
             (dialog-keys model :enter))
           (is (equal '("/nl-codex login") ran) "the folder's sign-in runs once")
-          (is (equal '(:signing-in t t nil nil) seen) "the wizard waits on where to sign in and the code, no prose")
+          (is (equal '(:signing-in t t t nil nil) seen) "the wizard waits on where to sign in, the whole address, the code, no prose")
           (is (equal (list address) opened) "the page opens in the browser")
           (is (equal '("nl-codex") picked) "once it answers, the pick goes on to its models")
           (is (null model.dialog)))))))
