@@ -9,7 +9,7 @@
 (defparameter +account-linked+
   "{\"state\":\"linked\",\"name\":\"Fixture machine\",\"base_url\":\"https://api.nodecode.ai/v1\",\"api_key\":\"machine-key-fixture\",\"provider\":\"nodecode\",\"model\":null,\"address\":null}")
 (defparameter +account-usage-plan+
-  "{\"object\":\"usage\",\"plan\":{\"name\":\"founders\",\"requests\":42000,\"used\":812.4,\"left\":41187.6,\"resets_at\":\"2026-11-03T00:00:00Z\",\"threads\":4,\"running\":1},\"balance\":[{\"currency\":\"eur\",\"micros\":12400000}],\"pays\":\"plan\"}")
+  "{\"object\":\"usage\",\"plan\":{\"name\":\"founders\",\"requests\":42000,\"used\":812.4,\"left\":41187.6,\"resets_at\":\"2026-11-01T00:00:00Z\",\"ends_at\":\"2026-11-24T00:00:00Z\",\"threads\":4,\"running\":1},\"balance\":[{\"currency\":\"eur\",\"micros\":12400000}],\"pays\":\"plan\"}")
 (defparameter +account-usage-credit+
   "{\"object\":\"usage\",\"plan\":null,\"balance\":[{\"currency\":\"usd\",\"micros\":0},{\"currency\":\"eur\",\"micros\":12400000}],\"pays\":\"balance\"}")
 (defparameter +account-usage-empty+
@@ -123,7 +123,7 @@
             (is-carrying text "https://nodecode.ai/cli?code=SZ3G-WVYL&mode=subscription" "SZ3G-WVYL"
               (if (eq opened t) "Your browser is open" "on this machine or any other")
               "Sign in with your nodecode.ai account"
-              "Signed in on Fixture machine" "Founders plan: 41,187 of 42,000 requests left, resets Nov 3"
+              "Signed in on Fixture machine" "Founders plan: 41,187 of 42,000 requests left, ends Nov 24"
               "1 of 4 running" "API credit: €12.40" "Paying with: the plan"
               "Default model: nodecode cyber-v1. Run nodecode to start."
               (:absent "Foresight Lab") (:absent "/models to choose")
@@ -282,6 +282,11 @@
         (is (member (nle::visual-style-bg (nle::style-for-tone :toast)) (cdr title) :test #'equal) "the waiting one sits a step lower")
         (is (notany (lambda (line) (find-if (lambda (c) (find c "─│╭╮╰╯")) (car line))) lines) "no rules drawn"))
       (is (find-if (lambda (line) (search "41,187 requests left   of 42,000" (car line))) lines))
+      (let ((end (find-if (lambda (line) (search "ends Nov 24" (car line))) lines)))
+        (is end)
+        (is (search (format nil "~d day~:p" (nle::account-days-left "2026-11-24T00:00:00Z"))
+                    (car end)))
+        (is (not (search "resets" (car end)))))
       (is (find-if (lambda (line) (search "1 of 4" (car line))) lines))
       (is (find-if (lambda (line) (search "€12.40" (car line))) lines))
       (is (every (lambda (line) (<= (length (car line)) 110)) lines) "a line keeps to its room")

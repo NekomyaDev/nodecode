@@ -332,11 +332,11 @@ the plan runs low or a spent plan's credit pays, DANGER when nothing can pay."
     (remove nil
             (list
              (if plan
-                 (format nil "~a plan: ~a of ~a requests left~@[, resets ~a~]~@[ · ~a~]"
+                 (format nil "~a plan: ~a of ~a requests left~@[, ends ~a~]~@[ · ~a~]"
                          (account-plan-name plan)
                          (account-count (or (json-value plan :number "left") 0))
                          (account-count (or (json-value plan :number "requests") 0))
-                         (account-day (json-value plan :string "resets_at"))
+                         (account-day (json-value plan :string "ends_at"))
                          (when-let (threads (json-value plan :integer "threads"))
                            (format nil "~d of ~d running" (or (json-value plan :integer "running") 0) threads)))
                  "No plan.")
@@ -555,8 +555,8 @@ slab's far edge."
                         (share (if (plusp requests) (min 1 (max 0 (/ left requests))) 0))
                         (threads (json-value plan :integer "threads"))
                         (running (min (or threads 0) (or (json-value plan :integer "running") 0)))
-                        (resets (json-value plan :string "resets_at"))
-                        (days (account-days-left resets)))
+                        (ends (json-value plan :string "ends_at"))
+                        (days (account-days-left ends)))
                    (list (list (list (s (format nil "~a plan" (account-plan-name plan))
                                         :foreground t))
                                (if (or plan-lit (plusp left))
@@ -568,7 +568,7 @@ slab's far edge."
                          (list (append (account-bar-segs share 26 tone (ground plan-lit))
                                        (list (s (format nil "  ~d%" (round (* 100 share))))))
                                nil)
-                         (list (append (list (s (format nil "~@[resets ~a~]~@[ · ~a~]" (account-day resets)
+                         (list (append (list (s (format nil "~@[ends ~a~]~@[ · ~a~]" (account-day ends)
                                                         (and days (format nil "~d day~:p" days)))))
                                        (when threads
                                          (list (s "     threads ")

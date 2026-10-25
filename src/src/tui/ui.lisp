@@ -13800,7 +13800,7 @@ Zig launcher gives the same thing."
                   :detail "It owns the store and serves its gateway until stopped, or exits at once when another process already owns it. A reconnecting shell spawns one; it is also the way to run an organism with no terminal.")
    (nlk:make-verb "login" "sign in to your nodecode.ai account: a subscription or API credits"
                   :arguments "[--subscription | --api]"
-                  :detail "Asks which one unless a flag says it, opens nodecode.ai in your browser with this machine's code in the page, and waits there for you to sign in with your nodecode.ai account and allow the machine; over ssh, open the printed page on any device. The key is saved locally and the account's meter printed: the plan's requests left and when they reset, the API credit. No terminal UI or session is opened. /login does the same from inside the shell; /models is for other providers.")
+                  :detail "Asks which one unless a flag says it, opens nodecode.ai in your browser with this machine's code in the page, and waits there for you to sign in with your nodecode.ai account and allow the machine; over ssh, open the printed page on any device. The key is saved locally and the account's meter printed: the plan's requests left and when the plan ends, the API credit. No terminal UI or session is opened. /login does the same from inside the shell; /models is for other providers.")
    (nlk:make-verb "machine" "link this machine to your nodecode.ai account with a code from its Machines page"
                   :label "machine link [CODE]"
                   :arguments "link [CODE]"
