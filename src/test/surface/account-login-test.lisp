@@ -318,6 +318,46 @@
     (let ((waiting (mapcar #'nle::picker-row-label (nle::usage-dialog-account-rows (rest rows)))))
       (is (equal '("Today, $0.03 across 1 session.") waiting) "a tab still adding up takes them when its read lands"))))
 
+(deftest account-badge-opens-the-account-alone (with-temp-store ())
+  ;; v1se.thom, 2026-10-25: the footer's account badge opened /usage, whose range tabs and spend
+  ;; breakdown he called useless there -- "just show the Nodecode.ai account and the API credit
+  ;; box, thats it". The badge's click runs EXECUTE-SLASH-COMMAND on its link's name.
+  (let ((model (make-frame-model 110 40))
+        (reads '()))
+    (with-stubbed-fdefinition (nle::off-loop (model thunk continuation) (push continuation reads) nil)
+      (let ((nle::*account-meter* (account-meter-fixture +account-usage-plan+)))
+        (nle::execute-slash-command model "account" "")
+        (let* ((dialog (nle::chat-model-dialog model))
+               (rows (nle::picker-dialog-rows dialog))
+               (labels (mapcar #'nle::picker-row-label rows)))
+          (is (eq :account (nle::picker-dialog-kind dialog)))
+          (is (equal "account" (nle::picker-dialog-command :account)) "a second click on the badge closes it")
+          (is (null (nle::picker-dialog-tabs dialog)) "no Today / 7 days / 30 days / All")
+          (is (equal "nodecode.ai account" (first labels)))
+          (is (every (lambda (row) (equal '(:account) (nle::picker-row-value row))) rows) "the account's rows and nothing else")
+          (is (notany (lambda (label) (or (search "across" label) (search "Spend" label)
+                                          (search "Model calls" label) (search "Sessions" label)))
+                      labels))
+          (is (some (lambda (label) (search "API credit" label)) labels))
+          (is (some (lambda (label) (search "Founders plan" label)) labels))
+          (is (= 1 (length reads)) "one read, the account's again: none of /usage's ranges")
+          ;; Credit bought while it is open: the gate's fresh answer redraws it.
+          (funcall (first reads) model
+                   (shasht:read-json
+                    (format nil "{\"signed_in\":true,\"meter\":{\"label\":\"Credit\",\"value\":\"12.40\",\"tone\":\"success\"},\"usage\":~a}"
+                            +account-usage-credit+)))
+          (is (eq dialog (nle::chat-model-dialog model)))
+          (let ((fresh (mapcar #'nle::picker-row-label (nle::picker-dialog-rows dialog))))
+            (is (equal "nodecode.ai account" (first fresh)))
+            (is (some (lambda (label) (search "No plan" label)) fresh) "the fresh meter's slabs")
+            (is (notany (lambda (label) (search "Founders plan" label)) fresh) "the stale ones go"))))
+      (nle::dismiss-dialog model nil)
+      (let ((nle::*account-meter* nil))
+        (nle::execute-slash-command model "account" "")
+        (let ((dialog (nle::chat-model-dialog model)))
+          (is (null (nle::picker-dialog-rows dialog)))
+          (is (search "/login" (nle::picker-dialog-empty-label dialog)) "signed out, it says how to sign in"))))))
+
 (deftest account-footer-badge-is-two-chips-where-grounds-paint ()
   (let ((nle::*account-meter* (account-meter-fixture +account-usage-plan+))
         (model (make-instance 'nle::chat-model)))
@@ -326,7 +366,7 @@
         (is (equal '(" Founders " " 41.1k ") (mapcar #'nle::seg-text segs)))
         (is (eq :sheet-chip (nle::seg-ground (first segs))))
         (is (equal (nle::visual-style-fg (nle::style-for-tone :success)) (nle::visual-style-bg (nle::seg-ground (second segs)))) "the value's chip is the meter's tone")
-        (is (every (lambda (seg) (equal '(:command . "usage") (nle::seg-link seg))) segs))))
+        (is (every (lambda (seg) (equal '(:command . "account") (nle::seg-link seg))) segs))))
     (let ((nle::*color-profile* :ansi))
       (let ((segs (nle::account-meter-segs model)))
         (is (equal '("Founders 41.1k") (mapcar #'nle::seg-text segs)) "16 colours: plain words")

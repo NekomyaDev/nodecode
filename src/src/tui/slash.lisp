@@ -129,6 +129,13 @@
                             :session nil
                             :help-detail
                             "Spend at catalog prices, model calls, the cache share and what it saved, first-token waits and failed turns across every session, then spend by day, the models, the costliest sessions and the folders. On a shell, a dialog: Tab moves between today, 7 days, 30 days and all (seven days unless named), Enter on a session opens it; on a channel or the web page, the same as text")
+        ;; What the footer's account badge opens (surface/client.lisp SLASH-ACCOUNT-OP). No
+        ;; headless arm: a room or a page would be shown this home's balance.
+        (make-slash-command "account"
+                            "Your nodecode.ai account: the plan's requests left and the API credit"
+                            :session nil
+                            :help-detail
+                            "The plan's slab and the API credit's side by side, the one paying now lifted and badged, read again from nodecode.ai when it opens; the footer's account badge opens it. Not signed in, it says so: /login signs in")
         ;; The account's sign-in from inside the shell (surface/account-login.lisp): the
         ;; gateway's organism claims, opens the page and waits, as `nodecode login' does. No
         ;; headless arm: a room or a page signing this home in to someone's account would
@@ -139,7 +146,7 @@
                             :dispatch :args :op 'slash-login-op :completer '("subscription" "api")
                             :session nil
                             :help-detail
-                            "Bare asks which one; either way nodecode.ai opens in your browser with this machine's code in the page, and you sign in with your nodecode.ai account and allow the machine. Over ssh, open the page the status line names on any device. The key is saved in this home's auth.json, and the footer shows the account's meter from then on: the plan's requests left, or the API credit; click it for /usage")
+                            "Bare asks which one; either way nodecode.ai opens in your browser with this machine's code in the page, and you sign in with your nodecode.ai account and allow the machine. Over ssh, open the page the status line names on any device. The key is saved in this home's auth.json, and the footer shows the account's meter from then on: the plan's requests left, or the API credit; click it for /account")
         (make-slash-command "details"
                             "Set the Developer or Standard viewport"
                             :usage "details developer|standard" :dispatch :args

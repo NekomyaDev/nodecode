@@ -499,11 +499,11 @@ TONE's colour on whatever it stands on."
 
 (defun account-meter-segs (model)
   "The footer's account badge: the plan's name on a chip, then what is left on a chip of the
-meter's tone, both a link to /usage; NIL when this home is not signed in to nodecode.ai."
+meter's tone, both a link to /account; NIL when this home is not signed in to nodecode.ai."
   (when-let (value (getf *account-meter* :value))
     (let ((label (getf *account-meter* :label))
           (tone (or (getf *account-meter* :tone) :muted))
-          (target (cons :command "usage")))
+          (target (cons :command "account")))
       (if (grounds-shown-p)
           (list (make-seg :text (format nil " ~a " label) :link target :ground :sheet-chip
                           :tone (if (equal target (chat-model-hover-target model)) :disclosure-hover :sheet-chip))
@@ -620,9 +620,10 @@ LEFT clipped to what RIGHT leaves, RIGHT flush to the far pad and dropped when i
                                       :tone :muted)))))))
 
 (defun account-slab-rows (key)
-  "The nodecode.ai account as /usage shows it: its heading, then the plan's slab and the credit's
-side by side, a picker row per line keyed by KEY (a /usage tab), each a heading the arrows pass
-over that paints its line of both. NIL when this home is not signed in to nodecode.ai."
+  "The nodecode.ai account as /account and /usage show it: its heading, then the plan's slab and
+the credit's side by side, a picker row per line keyed by KEY (a /usage tab; empty in /account), each
+a heading the arrows pass over that paints its line of both. NIL when this home is not signed in
+to nodecode.ai."
   (when-let (usage (getf *account-meter* :usage))
     (destructuring-bind ((plan-ground plan-lines) (credit-ground credit-lines)) (account-slabs usage)
       (let* ((depth (+ 2 (max (length plan-lines) (length credit-lines))))

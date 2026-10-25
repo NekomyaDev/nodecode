@@ -5541,6 +5541,19 @@ out has none and takes them when it lands (USAGE-DIALOG-ROWS)."
                            (remove '(:account) own :key #'picker-row-value :test #'equal))
                    own)))
 
+(defun dialog-account-read (model redraw)
+  "Read the nodecode.ai account's meter again from the gate for the dialog open now, off the loop:
+it lands in *ACCOUNT-METER* and the dialog's rows become (REDRAW ROWS). The footer reads it at
+connect and after a turn only, so a top-up bought while this shell was open read `API credit:
+none' in the dialog until the next prompt (checkout audit, 2026-10-22)."
+  (dialog-read model
+               (lambda () (gateway-model-http-call model :get "/api/gateway/account?fresh=1" nil))
+               (lambda-ignoring (model dialog value)
+                 (unless (off-loop-failure value)
+                   (setf *account-meter* (account-meter-of value)
+                         dialog.rows (funcall redraw dialog.rows)))
+                 nil)))
+
 (defun slash-usage-op (model &optional args &aux (range (usage-range-word args)))
   "Open the /usage dialog on the range ARGS names, its reads off the loop."
   (cond
@@ -5566,18 +5579,28 @@ out has none and takes them when it lands (USAGE-DIALOG-ROWS)."
                                                                            :test #'equal)
                                                     (usage-dialog-rows id value)))
                           nil))))
-       ;; The account's meter, read again from the gate: it was read at connect
-       ;; and after a turn only, so a top-up bought while this shell was open
-       ;; read `API credit: none' here until the next prompt (checkout audit,
-       ;; 2026-10-22).
-       (dialog-read model
-                    (lambda () (gateway-model-http-call model :get "/api/gateway/account?fresh=1" nil))
-                    (lambda-ignoring (model dialog value)
-                      (unless (off-loop-failure value)
-                        (setf *account-meter* (account-meter-of value)
-                              dialog.rows (usage-dialog-account-rows dialog.rows)))
-                      nil))
+       (dialog-account-read model #'usage-dialog-account-rows)
        nil)))
+
+;;; --- /account ----------------------------------------------------------------
+;;; What the footer's account badge opens: the nodecode.ai account alone, the
+;;; plan's slab and the API credit's, no ranges and none of /usage's breakdown
+;;; -- v1se.thom, 2026-10-25: "just show the Nodecode.ai account and the API
+;;; credit box, thats it". No headless arm: a room or a page shown this home's
+;;; balance would read someone's account.
+
+(defun slash-account-op (model)
+  "Open the nodecode.ai account dialog: the plan's slab and the API credit's as the footer's meter
+last read them, then read again from the gate (DIALOG-ACCOUNT-READ)."
+  (flet ((rows (&optional stale)
+           (declare (ignore stale))
+           (account-slab-rows "")))
+    (open-picker-dialog model "Usage" (rows) (constantly nil)
+                        :kind :account
+                        :empty-label "Not signed in to nodecode.ai: /login signs in"
+                        :hint "esc close")
+    (dialog-account-read model #'rows))
+  nil)
 
 ;;; --- /think ------------------------------------------------------------------
 ;;; The picker and the footer read one answer, GET /api/gateway/target
