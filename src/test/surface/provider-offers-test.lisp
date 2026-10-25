@@ -182,12 +182,13 @@
 
 (deftest connect-an-offered-provider-signs-in-in-the-wizard-then-goes-on-to-its-models ()
   ;; A folder that signs in with a command (Codex's /openai-codex login):
-  ;; once it is in, the command runs and the wizard stays open on what it
-  ;; said -- the address to open, whole -- until the gateway's list reads the
-  ;; provider connected; then the pick goes on to its models. It used to
-  ;; close the list and run the command, which ended a setup walk on its
-  ;; summary with the address cut off in the status line.
-  (let ((ran '()) (picked '()) (reads 0) (seen nil)
+  ;; once it is in, the command runs, its page opens in the browser, and the
+  ;; wizard stays open on two lines -- where to sign in, the device code when
+  ;; there is one, none of the command's prose -- until the gateway's list
+  ;; reads the provider connected; then the pick goes on to its models. It
+  ;; used to close the list and run the command, which ended a setup walk on
+  ;; its summary with the address cut off in the status line.
+  (let ((ran '()) (picked '()) (reads 0) (seen nil) (opened '())
         (address "https://auth.example.test/authorize?client_id=nl&state=0123456789abcdef"))
     (with-stubbed-fdefinitions ((nle::install-offered-cell (model offer)
                                   model offer
@@ -196,7 +197,8 @@
                                   model
                                   (push line ran)
                                   (nlk:decode-json
-                                   (format nil "{\"text\": \"Open this address to sign in:\\n\\n~a\"}" address)))
+                                   (format nil "{\"text\": \"Open this address to sign in:\\n\\n~a\\n\\nthen enter the code ABCD-1234. If the browser runs elsewhere, send /nl-codex code ADDRESS.\"}" address)))
+                                (nle::open-target (url) (push url opened) t)
                                 (nle::picker-connected-provider-ids ()
                                   (incf reads)
                                   (if (= reads 1) '() '("nl-codex"))))
@@ -214,15 +216,17 @@
           (with-stubbed-fdefinition (nle::fetch-gateway-models (m)
                                       ;; the first read: the panel waits on the folder's words
                                       (when (and (= reads 0) (null seen))
-                                        (setf seen (list (nle::connect-dialog-step (nle::chat-model-dialog m))
-                                                         (rows-carry-p "Open this address to sign in:"
-                                                                       (nle::compose-frame m))
-                                                         (rows-carry-p "https://auth.example.test/authorize?"
-                                                                       (nle::compose-frame m)))))
+                                        (let ((frame (nle::compose-frame m)))
+                                          (setf seen (list (nle::connect-dialog-step (nle::chat-model-dialog m))
+                                                           (rows-carry-p "Sign in at auth.example.test/authorize" frame)
+                                                           (rows-carry-p "Code ABCD-1234" frame)
+                                                           (rows-carry-p "Open this address" frame)
+                                                           (rows-carry-p "browser runs elsewhere" frame)))))
                                       nil)
             (dialog-keys model :enter))
           (is (equal '("/nl-codex login") ran) "the folder's sign-in runs once")
-          (is (equal '(:signing-in t t) seen) "the wizard waits on what it said, the address whole")
+          (is (equal '(:signing-in t t nil nil) seen) "the wizard waits on where to sign in and the code, no prose")
+          (is (equal (list address) opened) "the page opens in the browser")
           (is (equal '("nl-codex") picked) "once it answers, the pick goes on to its models")
           (is (null model.dialog)))))))
 

@@ -9635,13 +9635,17 @@ result breaks to, a blank, the muted context -- or NIL for a list body."
                               (if checking :muted :danger)))
                    (connect-provider-name dialog)
                    (if (eq :signing-in (connect-dialog-step dialog))
-                       ;; under the clock, what the folder's sign-in said --
-                       ;; the address to open, a device code -- whole, an
-                       ;; address a link on every line it breaks over
-                       (loop for line in (split-lines (connect-dialog-result-message dialog))
-                             for link = (and (uiop:string-prefix-p "http" line) line)
-                             nconc (loop for piece in (wrapped-lines line room)
-                                         collect (list (make-seg :text piece :tone :foreground :link link))))
+                       ;; under the clock, where to sign in -- the page a link,
+                       ;; its query cut -- and the device code when there is
+                       ;; one; a command that answered no page says its words
+                       (multiple-value-bind (url code) (sign-in-facts (connect-dialog-result-message dialog))
+                         (if url
+                             (list* (list (make-seg :text (format nil "Sign in at ~a" (sign-in-page-label url))
+                                                    :tone :foreground :link url))
+                                    (and code (list (list (make-seg :text (format nil "Code ~a" code)
+                                                                    :tone :foreground :bold t)))))
+                             (loop for line in (split-lines (connect-dialog-result-message dialog))
+                                   nconc (wrapped-lines line room))))
                        (rest lines))))))
     (when lead
       (append (list (docked-panel-row lead width surface))
@@ -10024,8 +10028,8 @@ picker's own ceiling thumb."
      :empty-label "")
     (:signing-in
      :context "Sign in"
-     ;; a control string: CONNECT-SIGN-IN fills in the provider
-     :subtitle "Signing in to ~a."
+     ;; none: the panel names the provider under the page already
+     :subtitle ""
      :hint "esc back"
      :empty-label "")
     (:result
@@ -10179,6 +10183,35 @@ refused install says why over the list, and nothing else moved."
                     (render-state model)))))
   t)
 
+(defun sign-in-facts (text &aux (text (or text "")))
+  "The page TEXT, what a folder's sign-in command answered, sends the
+operator to, and the device code it asks for there when it names one: =>
+(values URL CODE), either NIL."
+  ;; The code is the word after `code' that reads as one -- digits or a dash
+  ;; in it: `enter the code ABCD-1234', never `send /openai-codex code ADDRESS'.
+  (let ((words (loop with start = nil
+                     for i from 0 to (length text)
+                     for blank = (or (= i (length text))
+                                     (member (char text i) '(#\Space #\Tab #\Newline #\Return)))
+                     if (and blank start) collect (subseq text start i) and do (setf start nil)
+                     else if (and (not blank) (null start)) do (setf start i))))
+    (values (let ((url (find-if (lambda (word) (or (uiop:string-prefix-p "https://" word)
+                                                   (uiop:string-prefix-p "http://" word)))
+                                words)))
+              (and url (string-right-trim ".,;)" url)))
+            (loop for (word next) on words
+                  for code = (and next (string-trim ".,;:()'\"" next))
+                  when (and code (string-equal (string-trim ":" word) "code")
+                            (<= 4 (length code) 16)
+                            (every (lambda (c) (or (alphanumericp c) (char= c #\-))) code)
+                            (some (lambda (c) (or (digit-char-p c) (char= c #\-))) code))
+                    return code))))
+
+(defun sign-in-page-label (url &aux (from (+ 3 (or (search "://" url) -3))))
+  "URL as the sign-in panel names it: no scheme, no query."
+  (subseq url from (or (position-if (lambda (c) (member c '(#\? #\#))) url :start from)
+                       (length url))))
+
 (defparameter *connect-sign-in-poll-seconds* 2
   "How long CONNECT-SIGN-IN waits between two reads of whether the provider
 answers yet.")
@@ -10216,6 +10249,9 @@ folder's sign-in still waiting without it."
                 (cond ((not (ours model)) :quiet)
                       (t (setf (connect-dialog-result-message dialog)
                                (if failure (format nil "~a: ~a" how failure) (or text "")))
+                         ;; the page opens where there is a browser to open it
+                         (when-let (url (and (not failure) (sign-in-facts text)))
+                           (ignore-errors (open-target url)))
                          ;; a refused command has nothing to wait for
                          (unless failure (wait model))
                          (render-state model)))))))
