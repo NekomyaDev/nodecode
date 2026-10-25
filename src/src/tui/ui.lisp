@@ -9642,13 +9642,16 @@ result breaks to, a blank, the muted context -- or NIL for a list body."
                        ;; answered no page says its words
                        (multiple-value-bind (url code) (sign-in-facts (connect-dialog-result-message dialog))
                          (if url
-                             (append (list (list (make-seg :text (format nil "Sign in at ~a" (sign-in-page-label url))
-                                                           :tone :foreground :link url)))
-                                     (when (find-if (lambda (c) (member c '(#\? #\#))) url)
-                                       (loop for piece in (wrapped-lines url room)
-                                             collect (list (make-seg :text piece :tone :muted :link url))))
-                                     (and code (list (list (make-seg :text (format nil "Code ~a" code)
-                                                                     :tone :foreground :bold t)))))
+                             ;; a blank row ahead of each part, so the clock,
+                             ;; the page, the address and the code stand apart
+                             (loop for part in (list (list (list (make-seg :text (format nil "Sign in at ~a" (sign-in-page-label url))
+                                                                           :tone :foreground :link url)))
+                                                     (when (find-if (lambda (c) (member c '(#\? #\#))) url)
+                                                       (loop for piece in (wrapped-lines url room)
+                                                             collect (list (make-seg :text piece :tone :muted :link url))))
+                                                     (and code (list (list (make-seg :text (format nil "Code ~a" code)
+                                                                                     :tone :foreground :bold t)))))
+                                   when part nconc (cons '() part))
                              (loop for line in (split-lines (connect-dialog-result-message dialog))
                                    nconc (wrapped-lines line room))))
                        (rest lines))))))
