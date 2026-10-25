@@ -127,6 +127,11 @@ now on; the table starts over once it holds +JSON-SHARED-STRING-COUNT+."
   "The largest exponent a number may spell: far past any float (1e308), and
 small enough that raising ten to it is instant.")
 
+(defparameter +json-max-digits+ 4300
+  "The most digits a number's whole part, fraction or exponent may spell:
+Python's own cap on a decimal integer. Folding them costs the square of their
+count, and a megabyte of them held the reader half a minute.")
+
 ;;; The reader descends, so depth is stack; wire JSON nests single digits deep
 ;;; and a document that nests hundreds is a peer's accident or a probe.
 (defparameter +json-max-depth+ 256
@@ -343,13 +348,15 @@ they spell, with room left for the escape that follows them."
          (read-digits (accumulator refusal &optional limit &aux (start index))
            "Fold the digits at INDEX into ACCUMULATOR; => the value, and a
 REFUSAL when there were none, and a refusal when LIMIT is given and the value
-passes it."
+passes it, or past +JSON-MAX-DIGITS+ of them."
            (loop for value = (and (< index end)
                                   (let ((byte (aref octets index)))
                                     (and (<= #.(char-code #\0) byte #.(char-code #\9))
                                          (- byte #.(char-code #\0)))))
                  while value
-                 do (setf accumulator (+ (* 10 accumulator) value))
+                 do (when (= (- index start) +json-max-digits+)
+                      (refuse "a number with too many digits"))
+                    (setf accumulator (+ (* 10 accumulator) value))
                     (when (and limit (> accumulator limit)) (refuse "an exponent out of range"))
                     (incf index))
            (when (= index start) (refuse refusal))

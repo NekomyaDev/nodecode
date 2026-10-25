@@ -596,7 +596,10 @@ write's four values."
         (format nil "~s is refused" text)))
   (is (signals-error nlk:json-refusal
                      (nlk:decode-json (format nil "~v@{[~}1~v@{]~}"
-                                              300 300 nil)))))
+                                              300 300 nil))))
+  (let ((most (make-string 4300 :initial-element #\7)))
+    (is (= (parse-integer most) (nlk:decode-json most)))
+    (is (signals-error nlk:json-refusal (nlk:decode-json (format nil "~a7" most))))))
 
 (deftest decode-json-reads-the-numbers-a-leading-zero-allows ()
   (is (eql 0 (nlk:decode-json "0")))
