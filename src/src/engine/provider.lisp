@@ -3617,7 +3617,7 @@ host gets HEADERS unchanged."
         (append headers
                 (remove-if (lambda (header) (assoc (car header) headers :test #'string-equal))
                            '(("HTTP-Referer" . "https://nodecode.ai")
-                             ("X-OpenRouter-Title" . "Nodecode")
+                             ("X-OpenRouter-Title" . "NODECODE")
                              ("X-OpenRouter-Categories" . "cli-agent,personal-agent")))
                 '())
         headers)))
