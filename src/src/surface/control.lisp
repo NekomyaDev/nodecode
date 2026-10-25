@@ -300,23 +300,32 @@ comes from (KEYS-JSON). POST {provider, key} saves KEY to auth.json the way
 takes a saved one out; {provider, forget: true} takes out of config.jsonc an
 entry the listing flags, PROVIDER as the listing says it
 (FORGET-PROVIDER-ENTRY). Each answers the listing; a key saved that nothing
-answered adds `unchecked', what happened."
+answered adds `unchecked', what happened. POST {provider, key, check: true}
+saves nothing and answers {verdict, words?}, PROVIDER-KEY-CHECK's verdict
+(works, refused, unreachable, unchecked, or none when nothing was asked):
+a shell's /models asks it here, where a cell's lane and its address run."
   (:route nil "/api/gateway/keys")
-  (let ((unchecked nil))
+  (let ((unchecked nil) (checked nil))
     (when (eq (getf env :request-method) :post)
       (let* ((request (gateway-request-json env))
              (provider (json-value request :string "provider"))
              (key (json-value request :string "key")))
         (require-non-empty (list provider) "provider must be a non-empty string" :required t)
-        (if (eq t (gethash "forget" request))
-            (forget-provider-entry provider)
-            (multiple-value-bind (verdict words) (and key (provider-key-check provider (nlk:trimmed key)))
-              (when (member verdict '(:refused :unreachable))
-                (error 'nlk:protocol-error :code :key_refused :field "key"
-                                           :message (format nil "~a; nothing was saved" words)))
-              (setf unchecked (and (eq verdict :unchecked) words))
-              (save-provider-api-key provider key)))))
-    (keys-json unchecked)))
+        (cond
+          ((eq t (gethash "forget" request))
+           (forget-provider-entry provider))
+          ((eq t (gethash "check" request))
+           (multiple-value-bind (verdict words) (and key (provider-key-check provider (nlk:trimmed key)))
+             (setf checked (json-object "verdict" (if verdict (string-downcase verdict) "none")
+                                        :opt "words" words))))
+          (t
+           (multiple-value-bind (verdict words) (and key (provider-key-check provider (nlk:trimmed key)))
+             (when (member verdict '(:refused :unreachable))
+               (error 'nlk:protocol-error :code :key_refused :field "key"
+                                          :message (format nil "~a; nothing was saved" words)))
+             (setf unchecked (and (eq verdict :unchecked) words))
+             (save-provider-api-key provider key))))))
+    (or checked (keys-json unchecked))))
 
 ;;; --- the cells ---------------------------------------------------------------------
 ;;; Presence is consent: a cell is on while its folder is in the
@@ -540,6 +549,62 @@ copy kept of it; {url, error} when the index cannot be read."
                        :opt "stale" stale))
       (error (condition)
         (json-object :opt "url" nlk:*hub-index-url* "cells" #() "error" (princ-to-string condition))))))
+
+;;; --- providers a cell serves, offered before it is installed ---------------------
+;;; A folder's .asd may say what it serves (NLK:OFFER-SERVES): a provider, by
+;;; its id, its name and how one signs in to it. The /models picker offers
+;;; each such provider of a folder this home has not installed, so picking
+;;; OpenCode Go or ChatGPT's Codex installs the folder that drives it
+;;; (SWITCH-CELL-ON) instead of asking a person to know its name first. Only
+;;; the release's own folders and Nodecode's own index are offered this way:
+;;; the community's entries keep /cells' explicit install.
+
+(defvar *provider-offers* nil
+  "(READ-AT . OFFERS): the folders PROVIDER-OFFERS last read, the release's
+and Nodecode's own index's, at READ-AT, a universal time.")
+
+(defvar *provider-offers-refresh* nil
+  "The thread rereading *PROVIDER-OFFERS*, while one runs.")
+
+(defparameter +provider-offers-seconds+ 600
+  "How long a read of the offers stands before the next ask rereads them, off
+the asking thread.")
+
+(defun read-provider-offers (&aux (shipped (nlk:shipped-cells)))
+  "The release's folders and Nodecode's own index's entries (NLK:HUB-CELLS,
+its kept copy when the network fails it) into *PROVIDER-OFFERS*; the
+release's alone when no index can be read."
+  (setf *provider-offers*
+        (cons (get-universal-time)
+              (append shipped (ignore-errors (nlk:hub-cells :shipped shipped :community nil))))))
+
+(defun provider-offers (&aux (memo *provider-offers*))
+  "Every provider an offered folder this home has not installed serves, as
+(:CELL NAME :COMMIT PIN :PROVIDER ID :NAME LABEL :SIGN-IN HOW :DESCRIPTION
+TEXT) plists in the folders' order; HOW is the folder's word, `key' or the
+command line that signs in. A folder this image cannot install (OFFER-MISSING)
+is not offered."
+  ;; The first ask reads; a later one past +PROVIDER-OFFERS-SECONDS+ answers
+  ;; what it has and rereads off its thread, so /models never waits on the hub.
+  (cond ((null memo) (setf memo (read-provider-offers)))
+        ((and (> (- (get-universal-time) (car memo)) +provider-offers-seconds+)
+              (not *provider-offers-refresh*))
+         ;; set before the thread starts, which clears it however it ends
+         (setf *provider-offers-refresh* t)
+         (spawn "provider-offers"
+           (unwind-protect (ignore-errors (read-provider-offers))
+             (setf *provider-offers-refresh* nil)))))
+  (loop for entry in (cdr memo)
+        for name = (nlk:offer-name entry)
+        unless (or (nlk:offer-missing entry) (nlk:find-cell name) (nlk:installed-cell-p name))
+          append (loop for serves in (nlk:offer-serves entry)
+                       for provider = (cdr (assoc "provider" serves :test #'string=))
+                       when (and (stringp provider) (plusp (length provider)))
+                         collect (list :cell name :commit (nlk:offer-commit entry)
+                                       :provider provider
+                                       :name (or (cdr (assoc "name" serves :test #'string=)) provider)
+                                       :sign-in (or (cdr (assoc "sign_in" serves :test #'string=)) "key")
+                                       :description (nlk:offer-description entry)))))
 
 ;;; --- the index: what the organism keeps --------------------------------------------
 ;;; The page's Index tab reads and writes the definitions the organism keeps,

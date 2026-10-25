@@ -818,7 +818,7 @@ and passes over one that leads nowhere."
 
 (defstruct (declared-system (:copier nil)
                             (:constructor make-declared-system
-                                (name &key layer knowledge depends-on files problem description)))
+                                (name &key layer knowledge depends-on files problem description serves)))
   "What one top-level .asd declares, read as data."
   ;; NAME is the system, LAYER whether its :class is the LAYER class,
   ;; KNOWLEDGE whether that layer carries (:knowledge . t) in :properties --
@@ -828,14 +828,30 @@ and passes over one that leads nowhere."
   ;; declares what a layer cannot — a :pathname, a component that is not
   ;; (:file NAME) — which the load records as the folder's failure rather than
   ;; loading nothing quietly. DESCRIPTION is its :description, "" when it has
-  ;; none.
+  ;; none. SERVES is what it says it serves, its :properties' (:serves . PLISTS)
+  ;; as SERVES-ENTRIES shapes it, NIL when it says nothing.
   (name "" :type string)
   (layer nil)
   (knowledge nil)
   (depends-on '())
   (files '())
   (problem nil)
-  (description "" :type string))
+  (description "" :type string)
+  (serves '()))
+
+(defun serves-entries (entries)
+  "ENTRIES, what a folder says it serves -- the plists of its .asd's (:serves
+. PLISTS) property, or the objects of an index entry's serves array -- in one
+shape, the one both are compared in: a list of alists, each (KEY . TEXT)
+sorted by KEY, a downcased string with - read as _. The core reads no key:
+what a kind of entry means is its consumer's (the /models picker reads
+provider)."
+  (loop for entry in entries
+        collect (sort (loop for (key . value) in (if (hash-table-p entry)
+                                                     (alexandria:hash-table-alist entry)
+                                                     (alexandria:plist-alist entry))
+                            collect (cons (substitute #\_ #\- (string-downcase (string key))) value))
+                      #'string< :key #'car)))
 
 (access (declared declared-system) (primary declared-system))
 
@@ -883,6 +899,11 @@ top-level .asd files declare — DECLARED-SYSTEMs, one per file, by name."
                                       (eq t (cdr (assoc :knowledge properties)))))
                     :description (let ((text (getf plist :description)))
                                    (if (stringp text) text ""))
+                    :serves (let ((properties (getf plist :properties)))
+                              (and (listp properties) (every #'consp properties)
+                                   (let ((serves (cdr (assoc :serves properties))))
+                                     (and (listp serves) (every #'listp serves)
+                                          (serves-entries serves)))))
                     :depends-on (loop for dependency in (let ((names (getf plist :depends-on)))
                                                           (and (listp names) names))
                                       when (or (stringp dependency) (symbolp dependency))
@@ -1971,7 +1992,9 @@ an entry of one of the hub's two indexes at a pinned commit."
   ;; can neither find loaded, nor shipped, nor on its registry — a folder with
   ;; any is offered as unavailable, with the reason, rather than installed
   ;; blind and failed at boot. DESCRIPTION is the primary system's
-  ;; :description, what a chooser shows beside the name. INDEX is which of the
+  ;; :description, what a chooser shows beside the name. SERVES is what it says
+  ;; it serves (SERVES-ENTRIES), which a consumer may offer it by before it is
+  ;; installed: the /models picker, its providers. INDEX is which of the
   ;; hub's indexes listed it, "hub" for Nodecode's own and "community" for
   ;; the one people submit to; NIL for a shipped folder.
   (name "" :type string)
@@ -1983,6 +2006,7 @@ an entry of one of the hub's two indexes at a pinned commit."
   (depends-on '() :type list)
   (missing '() :type list)
   (description "" :type string)
+  (serves '() :type list)
   (index nil))
 
 (access (entry offer) (provider offer))
@@ -2049,7 +2073,9 @@ loaded, nor defined by a file still there."
                                      :depends-on (folder-depends-on folder)
                                      :description
                                      (if-let (primary (first folder.systems))
-                                       primary.description ""))))
+                                       primary.description "")
+                                     :serves (when-let (primary (first folder.systems))
+                                               primary.serves))))
                      ;; ROOT's directories with an .asd, one level of grouping allowed (channels/)
                      (loop for directory in (uiop:subdirectories root)
                            ;; template/ is what a new peripheral is copied from, not a cell
@@ -2219,6 +2245,17 @@ runs, as OFFER records by name, each marked as listed by INDEX."
            for platforms = (json-value item :array "platforms")
            for depends-on = (loop for system across (json-array item "depends_on")
                                   when (stringp system) collect (string-downcase system))
+           for serves = (multiple-value-bind (array present) (gethash "serves" item)
+                          (cond ((not present) '())
+                                ((and (vectorp array) (not (stringp array))
+                                      (every (lambda (each)
+                                               (and (hash-table-p each) (plusp (hash-table-count each))
+                                                    (loop for value being the hash-values of each
+                                                          always (stringp value))))
+                                             array))
+                                 (serves-entries (coerce array 'list)))
+                                (t (error "hub entry ~a: serves is an array of objects whose values are text"
+                                          name))))
            do (unless (and name (ppcre:scan "^[a-z0-9][a-z0-9._-]*\\z" name))
                 (error "hub entry ~s: a name is a-z, 0-9, . _ and -, first a letter or digit" name))
               (unless (and git (uiop:string-prefix-p "https://" git))
@@ -2233,6 +2270,7 @@ runs, as OFFER records by name, each marked as listed by INDEX."
              collect (make-offer :name name :git git :commit commit :path path :index listed-by
                                  :systems (list name)
                                  :depends-on depends-on
+                                 :serves serves
                                  :missing (unavailable-systems depends-on shipped-systems)
                                  :description (or (json-value item :string "description") "")))
      #'string< :key #'offer-name)))
@@ -2294,7 +2332,7 @@ them. NIL on Windows, where a clone makes none."
 installer's. => TARGET."
   ;; The clone is proven before it moves: HEAD is the pinned commit, the
   ;; primary system is the entry's name and, for an entry an index listed,
-  ;; its description and depends_on are the index's, no symbolic link reaches
+  ;; its description, depends_on and serves are the index's, no symbolic link reaches
   ;; out of it, and every system it declares it needs is here. It is made in
   ;; .cell-staging/ beside the root and renamed in, one filesystem and one
   ;; rename, because a boot loads every folder under the root that carries an
@@ -2345,7 +2383,11 @@ installer's. => TARGET."
               (error "~a: the index's description is not the .asd's, ~s" entry.name primary.description))
             (unless (null (set-exclusive-or declared entry.depends-on :test #'string-equal))
               (error "~a: the index's depends_on ~s is not the .asd's ~s"
-                     entry.name entry.depends-on declared)))
+                     entry.name entry.depends-on declared))
+            ;; what a picker offered the folder by is what the folder says it serves
+            (unless (null (set-exclusive-or primary.serves entry.serves :test #'equal))
+              (error "~a: the index's serves ~s is not the .asd's ~s"
+                     entry.name entry.serves primary.serves)))
           (when-let (links (repository-links source))
             (error "~a carries symbolic link~p (~{~a~^, ~}); a cell may not"
                    entry.name (length links) links))

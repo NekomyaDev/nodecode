@@ -1,0 +1,188 @@
+;;;; provider-offers-test.lisp --- a provider a cell serves, offered by
+;;;; /models before that cell is installed, and installed when it is picked.
+;;;;
+;;;; SPDX-License-Identifier: MIT
+;;;;
+;;;; The folder's .asd says what it serves; Nodecode's index carries a copy,
+;;;; held to the .asd when the folder is cloned. The picker lists each such
+;;;; provider of a folder this home lacks, and Enter installs the folder, then
+;;;; asks what the provider asks for: its key, or the command it signs in with.
+
+(in-package #:nodecode.test)
+
+(defparameter +go-asd+
+  "(defsystem \"nl-hub-go\" :properties ((:serves (:provider \"nl-go\" :name \"NL Go\" :sign-in \"key\"))) :serial t :components ((:file \"cell\")))"
+  "The .asd of a folder serving the provider nl-go, signed in to with a key.")
+
+(defun go-index (serves)
+  "A format-1 hub index of one entry, nl-hub-go, whose serves is the JSON text SERVES."
+  (format nil "{\"format\": 1, \"cells\": [{\"name\": \"nl-hub-go\", \"git\": \"https://example.org/o/c.git\", \"commit\": ~s, \"description\": \"\", \"serves\": ~a}]}"
+          (make-string 40 :initial-element #\a) serves))
+
+(deftest cells-serves-is-read-alike-from-the-asd-and-the-index-and-held-at-the-clone ()
+  ;; One shape from both: the .asd's (:serves (:provider ... :sign-in ...))
+  ;; and the index's {\"provider\": ..., \"sign_in\": ...} compare equal, and the
+  ;; clone refuses an index entry that offers a folder by what the folder
+  ;; does not say it serves.
+  (let ((indexed (nlk:offer-serves
+                  (first (nlk:read-hub-index
+                          (go-index "[{\"provider\": \"nl-go\", \"name\": \"NL Go\", \"sign_in\": \"key\"}]")
+                          :shipped '())))))
+    (is (equal '((("name" . "NL Go") ("provider" . "nl-go") ("sign_in" . "key"))) indexed))
+    (with-temp-trees ((remote "serves-remote") (home "serves-home"))
+      (let ((root (merge-pathnames "cells/" home)))
+        (multiple-value-bind (git commit)
+            (hub-fixture-repository remote "nl-hub-go"
+                                    (lambda (folder)
+                                      (write-temp-file (merge-pathnames "nl-hub-go.asd" folder) +go-asd+)))
+          (let ((asd (nlk::declared-system-serves
+                      (first (nlk::cell-folder-systems
+                              (nlk::make-cell-folder (merge-pathnames "nl-hub-go/" remote)))))))
+            (is (equal indexed asd) "the .asd's plist reads as the index's object"))
+          (let ((other (hub-offer "nl-hub-go" git commit
+                                  :serves (nlk::serves-entries (list '(:provider "nl-other"))))))
+            (is (search "serves" (hub-refusal other root)) "an index offering it by another provider is refused"))
+          (is (null (nlk::cell-folders root)) "and leaves nothing to load")
+          (is (hub-install (hub-offer "nl-hub-go" git commit :serves indexed) root) "the index's own copy installs")))))
+  (dolist (serves '("\"nl-go\"" "[\"nl-go\"]" "[{\"provider\": 7}]" "[{}]"))
+    (is (search "serves is an array" (refusal-text error (nlk:read-hub-index (go-index serves) :shipped '())))
+        serves)))
+
+(deftest provider-offers-name-the-providers-of-folders-this-home-lacks ()
+  ;; Each provider an offered folder serves, with the pin a picker installs it
+  ;; at; a folder this image could not install, or one already in, is not
+  ;; offered.
+  (let* ((commit (make-string 40 :initial-element #\b))
+         (serves (nlk::serves-entries (list '(:provider "nl-go" :name "NL Go")
+                                            '(:provider "nl-codex" :name "NL Codex" :sign-in "/nl-codex login"))))
+         (nle::*provider-offers*
+           (cons (get-universal-time)
+                 (list (nlk::make-offer :name "nl-cell-go" :git "https://example.org/c.git" :commit commit
+                                        :description "Go" :serves serves :index "hub")
+                       (nlk::make-offer :name "nl-cell-blocked" :serves serves :missing '("nl-no-such"))
+                       (nlk::make-offer :name "nl-cell-quiet")))))
+    (is (equal (list (list :cell "nl-cell-go" :commit commit :provider "nl-go" :name "NL Go"
+                           :sign-in "key" :description "Go")
+                     (list :cell "nl-cell-go" :commit commit :provider "nl-codex" :name "NL Codex"
+                           :sign-in "/nl-codex login" :description "Go"))
+               (nle::provider-offers)))
+    (with-stubbed-fdefinition (nlk:installed-cell-p (name &optional root)
+                                (and (equal name "nl-cell-go") (or root t)))
+      (is (null (nle::provider-offers)) "an installed folder is not offered"))))
+
+(defun go-offer (&key (sign-in "key") (provider "nl-go") (cell "nl-cell-go"))
+  "A PROVIDER-OFFERS plist for CELL serving PROVIDER, signed in to by SIGN-IN."
+  (list :cell cell :commit (make-string 40 :initial-element #\c) :provider provider
+        :name (if (equal provider "nl-go") "NL Go" "NL Codex") :sign-in sign-in :description ""))
+
+(deftest connect-list-offers-a-provider-its-uninstalled-folder-serves ()
+  ;; models.dev's row for a provider a folder serves becomes the folder's --
+  ;; a key saved from it alone would reach a lane that cannot talk to it --
+  ;; and a provider models.dev lacks is listed by the folder's name for it.
+  (with-model-listings (:catalog "{
+  \"nl-go\": {\"name\": \"NL Go\", \"npm\": \"@ai-sdk/openai-compatible\", \"api\": \"https://nl-go.test/v1\", \"models\": {\"g\": {\"tool_call\": true}}},
+  \"acme-labs\": {\"name\": \"Acme Labs\", \"npm\": \"@ai-sdk/openai-compatible\", \"api\": \"https://acme-labs.test/v1\", \"models\": {\"one\": {\"tool_call\": true}}}
+}")
+    (with-stubbed-fdefinition (nle::picker-provider-offers ()
+                                (list (go-offer)
+                                      (go-offer :provider "nl-codex" :cell "nl-cell-codex"
+                                                :sign-in "/nl-codex login")))
+      (let* ((rows (nle::connect-picker-rows))
+             (go (find "NL Go" rows :key #'nle::picker-row-label :test #'equal))
+             (codex (find "NL Codex" rows :key #'nle::picker-row-label :test #'equal))
+             (acme (find "Acme Labs" rows :key #'nle::picker-row-label :test #'equal)))
+        (is (= 1 (count "NL Go" rows :key #'nle::picker-row-label :test #'equal)) "one row, not two")
+        (is (equal "1 model  installs nl-cell-go when picked" (nle::picker-row-detail go)))
+        (is (equal "nl-cell-go" (getf (getf (nle::picker-row-value go) :install) :cell)))
+        (is (equal "nl-go" (getf (nle::picker-row-value go) :provider)))
+        (is (equal "installs nl-cell-codex, then /nl-codex login" (nle::picker-row-detail codex)))
+        (is (equal "nl-codex" (getf (nle::picker-row-value codex) :provider)))
+        (is (null (getf (nle::picker-row-value acme) :install)) "a provider no folder serves is as it was")))))
+
+(defun open-offer-wizard (model offer)
+  "The /models wizard over MODEL listing OFFER's provider as the picker does;
+=> the dialog."
+  (nle::open-connect-dialog
+   model (lambda ()
+           (list (nle::make-picker-row :label (getf offer :name)
+                                       :value (list :provider (getf offer :provider) :install offer))))
+   (nlk:lambda-ignoring (model provider-id secret done) nil)
+   nil)
+  model.dialog)
+
+(deftest connect-enter-on-an-offered-provider-installs-its-folder-then-signs-in ()
+  ;; Enter installs the folder through the organism, at the pin the list
+  ;; read, then goes on as the provider asks: its key step, or the list
+  ;; closes and the folder's sign-in command runs. A refused install says
+  ;; why over the list and moves nothing else.
+  (let ((installed '()) (typed '()))
+    (with-stubbed-fdefinitions ((nle::install-offered-cell (model offer)
+                                  model
+                                  (push offer installed)
+                                  (if (equal "nl-cell-gone" (getf offer :cell))
+                                      (list :refused "the hub has no nl-cell-gone")
+                                      (list :commands '())))
+                                (nle::submit-slash (model text)
+                                  model
+                                  (push text typed)
+                                  (values t nil)))
+      (with-frame-model (model 100 30 :session-id "offer-key")
+        (let ((dialog (open-offer-wizard model (go-offer))))
+          (dialog-keys model :enter)
+          (is (equal (list (go-offer)) installed) "the folder, at the pin the list read")
+          (is (eq :api-key (nle::connect-dialog-step dialog)) "then its key")
+          (is (equal "nl-go" (nle::connect-dialog-provider-id dialog)))))
+      (with-frame-model (model 100 30 :session-id "offer-command")
+        (open-offer-wizard model (go-offer :provider "nl-codex" :cell "nl-cell-codex"
+                                           :sign-in "/nl-codex login"))
+        (dialog-keys model :enter)
+        (is (equal "nl-cell-codex" (getf (first installed) :cell)))
+        (is (null model.dialog) "the list closes")
+        (is (equal '("/nl-codex login") typed) "and the folder's sign-in runs"))
+      (with-frame-model (model 100 30 :session-id "offer-refused")
+        (let ((dialog (open-offer-wizard model (go-offer :cell "nl-cell-gone"))))
+          (dialog-keys model :enter)
+          (is (eq :provider (nle::connect-dialog-step dialog)) "back on the list")
+          (is (rows-carry-p "nl-cell-gone was not installed: the hub has no nl-cell-gone"
+                            (nle::compose-frame model))))))))
+
+(deftest control-keys-check-answers-the-verdict-and-saves-nothing (with-temp-gateway (port))
+  ;; A shell asks here whether a key works: the address a turn dials is set
+  ;; where the cells run (OpenCode Go's cell gives Go's), and the check is the
+  ;; organism's. Nothing is saved: the shell saves what the verdict lets it.
+  (with-saved-globals ((nle::*provider-models-cache-path* nil) (nle::*models-catalog-path* nil))
+    (with-stubbed-fdefinition (nle::provider-key-check (provider key)
+                                (if (equal key "sk-good")
+                                    (values :works nil)
+                                    (values :refused (format nil "~a refused this key (HTTP 401)" provider))))
+      (with-gateway-http (port :post "/api/gateway/keys" :status 200
+                          :body "{\"provider\": \"nl-go\", \"key\": \" sk-good \", \"check\": true}")
+        (is (equal "works" (nlk:json-value body :string "verdict")))
+        (is (null (nlk:json-value body :array "providers")) "the verdict, not the listing"))
+      (with-gateway-http (port :post "/api/gateway/keys" :status 200
+                          :body "{\"provider\": \"nl-go\", \"key\": \"sk-bad\", \"check\": true}")
+        (is (equal "refused" (nlk:json-value body :string "verdict")))
+        (is (equal "nl-go refused this key (HTTP 401)" (nlk:json-value body :string "words"))))
+      (let ((saved (nlk:json-value (nle::read-auth-file nle::*auth-file-path*) :object "api_keys" "nl-go")))
+        (is (null saved) "nothing was saved")))))
+
+(deftest connect-credential-sink-in-a-shell-asks-its-organism ()
+  ;; A shell runs no cell, so the key is checked where the provider's lane
+  ;; runs: the organism's verdict, said as the shell's own would be.
+  (with-model-listings (:catalog +connect-catalog-fixture+)
+    (with-frame-model (model 80 24 :session-id "connect-sink-shell")
+      (let ((asked '()) (said nil) (nle::*serving* nil))
+        (clrhash nle::*key-checks*)
+        (with-stubbed-fdefinitions ((nle::provider-key-check (provider key)
+                                      (error "a shell checked ~a with ~a itself" provider key))
+                                    (nle::gateway-model-http-call (model method path body &rest keys)
+                                      (push (list method path (and body (nlk:json-value body :boolean "check")))
+                                            asked)
+                                      (progn model keys
+                                           (if (equal path "/api/gateway/keys")
+                                               (nlk:json-object "verdict" "works")
+                                               (nlk:json-object "models" #() "providers" #())))))
+          (funcall (nle::connect-credential-sink) model "anthropic" "sk-1"
+                   (nlk:lambda-ignoring (model message error) (setf said (list message error)))))
+        (is (equal '(:post "/api/gateway/keys" t) (car (last asked))) "the organism was asked")
+        (is (equal '("Anthropic key works, saved to auth.json" nil) said))))))

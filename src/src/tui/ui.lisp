@@ -9041,7 +9041,7 @@ it answers. No row, or no handler: nothing happens."
          t)
         (dialog.input-label (setf dialog.input (concatenate 'string dialog.input line)) t)
         ((and (connect-dialog-p dialog)
-              (member (connect-dialog-step dialog) '(:result :checking)))
+              (member (connect-dialog-step dialog) '(:result :checking :installing)))
          nil)
         ((picker-dialog-searchable dialog)
          (picker-search-mutate dialog (clip (concatenate 'string dialog.search line)
@@ -9621,11 +9621,11 @@ result breaks to, a blank, the muted context -- or NIL for a list body."
                          (if (plusp (length value)) (seg value :composer) (seg "(empty)" :muted)))
                    dialog.input-context)))
         ((and (connect-dialog-p dialog)
-              (member (connect-dialog-step dialog) '(:result :checking)))
+              (member (connect-dialog-step dialog) '(:result :checking :installing)))
          ;; A result's words break to the panel's width, as a toast's
          ;; do, and MORE carries the lines after the first: a refusal
          ;; ran its remedy off the edge, past column 72 at 80 columns.
-         (let* ((checking (eq (connect-dialog-step dialog) :checking))
+         (let* ((checking (member (connect-dialog-step dialog) '(:checking :installing)))
                 (room (max 8 (docked-panel-room width)))
                 (lines (if checking
                            (list (connect-checking-clock dialog))
@@ -10007,6 +10007,12 @@ picker's own ceiling thumb."
      :subtitle "Asking ~a whether it takes this key, waiting up to ~d seconds."
      :hint "esc back"
      :empty-label "")
+    (:installing
+     :context "Install"
+     ;; a control string: CONNECT-INSTALL fills in the folder and its pin
+     :subtitle "Installing ~a~@[ at ~a~], the cell that serves this provider."
+     :hint "esc back"
+     :empty-label "")
     (:result
      :context "Errors"
      :subtitle "Credential setup needs attention."
@@ -10042,8 +10048,9 @@ slots the panel already reads."
   ;; The check says how long it waits and counts up to it, as the import's
   ;; does: a static `checking...' would read as a hang. The tick repaints
   ;; when the tenth shown moves.
-  (setf (connect-dialog-checking-since dialog) (and (eq step :checking) (get-internal-real-time))
-        dialog.on-tick (and (eq step :checking)
+  (setf (connect-dialog-checking-since dialog) (and (member step '(:checking :installing))
+                                                    (get-internal-real-time))
+        dialog.on-tick (and (member step '(:checking :installing))
                             (let ((shown nil))
                               (lambda (model dialog &aux (now (connect-checking-clock dialog)))
                                 (declare (ignore model))
@@ -10063,8 +10070,9 @@ slots the panel already reads."
 
 (defun connect-checking-clock (dialog &aux (since (connect-dialog-checking-since dialog)))
   "`checking… 1.3s', the checking step's body line, counting from when the
-step began."
-  (format nil "checking… ~a" (format-turn-elapsed (if since (since-ms since) 0))))
+step began; `installing… 1.3s' on the installing step."
+  (format nil "~:[checking~;installing~]… ~a" (eq :installing (connect-dialog-step dialog))
+          (format-turn-elapsed (if since (since-ms since) 0))))
 
 (defun connect-provider-name (dialog)
   "The provider as the wizard names it: the catalog label, else the id."
@@ -10095,6 +10103,57 @@ provider's id, a provider's key. Any other row moves nothing."
               (connect-dialog-key-page dialog) (getf value :key-page)))
     (connect-enter-step dialog (if (getf value :custom) :custom-provider :api-key))))
 
+(defun connect-install (model dialog row &key key &aux (value (picker-row-value row))
+                                                     (offer (getf value :install))
+                                                     (id (getf value :provider)))
+  "Enter on ROW, a provider a folder not installed here serves
+(PICKER-PROVIDER-OFFERS): install that folder through the organism, off the
+loop (INSTALL-OFFERED-CELL), then go on as the provider asks -- the command
+its folder signs in with, a pick when a key it has already answers, else its
+key step. KEY, Ctrl+E's, asks for a key whatever the folder signs in with. A
+refused install says why over the list, and nothing else moved."
+  (connect-clear-credential dialog)
+  (setf (connect-dialog-provider-id dialog) id
+        (connect-dialog-provider-label dialog) (picker-row-label row))
+  (connect-enter-step dialog :installing)
+  (setf dialog.subtitle (format nil dialog.subtitle (getf offer :cell)
+                                (let ((pin (getf offer :commit)))
+                                  (and (stringp pin) (subseq pin 0 (min 7 (length pin)))))))
+  (off-loop model
+            (lambda () (install-offered-cell model offer))
+            (lambda (model answer)
+              ;; Esc, or another dialog, moved the wizard on: the answer moves nothing
+              (if (not (and (eq dialog (chat-model-dialog model))
+                            (eq :installing (connect-dialog-step dialog))))
+                  :quiet
+                  (let ((refused (or (off-loop-failure answer) (getf answer :refused)))
+                        (how (getf offer :sign-in)))
+                    (cond
+                      (refused
+                       (connect-clear-credential dialog)
+                       (connect-enter-step dialog :provider)
+                       (show-status model (format nil "~a was not installed: ~a" (getf offer :cell) refused)
+                                    :error-p t))
+                      (t
+                       (when-let (commands (getf answer :commands))
+                         (set-gateway-commands commands))
+                       (setf dialog.rows (funcall (connect-dialog-provider-rows dialog)))
+                       (cond
+                         ;; the folder signs in with a command of its own: the
+                         ;; list closes and the command runs, as if typed
+                         ((and (not key) (uiop:string-prefix-p "/" how))
+                          (dismiss-dialog model dialog.on-cancel)
+                          (submit-slash model how))
+                         ;; a key already answers: a pick, as Enter on a
+                         ;; connected provider is
+                         ((and (not key) (getf value :connected))
+                          (let ((on-success (connect-dialog-on-success dialog)))
+                            (dismiss-dialog model (and on-success
+                                                       (lambda (model) (funcall on-success model id))))))
+                         (t (connect-ask-key dialog row)))))
+                    (render-state model)))))
+  t)
+
 (defun connect-back (model dialog)
   "One step back (the Zig backConnectDialog): from the provider step the
 flow closes; either input step drops the half-gathered credential and
@@ -10115,6 +10174,10 @@ checked."
                                 (json-object "models" (gethash dialog *models-frequent-by-dialog* #())))))
     ;; the answer, when it lands, finds the dialog moved on and takes nothing
     (:checking (connect-enter-step dialog :api-key))
+    ;; the install goes on in the organism; its answer finds the list
+    (:installing
+     (connect-clear-credential dialog)
+     (connect-enter-step dialog :provider))
     (:result
      (setf (connect-dialog-result-message dialog) "")
      (cond
@@ -10141,7 +10204,11 @@ showing for one to mean anything else."
      (connect-back model dialog)
      t)
     ((and (eq step :provider) ctrl (characterp key) (char-equal key #\e))
-     (connect-ask-key dialog (selected-of (picker-visible-rows dialog) (connect-dialog-selection dialog)))
+     (let ((row (selected-of (picker-visible-rows dialog) (connect-dialog-selection dialog))))
+       ;; a provider no installed folder serves yet is installed first
+       (if (getf (and row (picker-row-value row)) :install)
+           (connect-install model dialog row :key t)
+           (connect-ask-key dialog row)))
      t)
     ((eq key :enter)
      ;; The Zig submit + persist ladder; a failed save is the result step's message.
@@ -10155,6 +10222,9 @@ showing for one to mean anything else."
                    (dismiss-dialog model (and on-success
                                               (lambda (model) (funcall on-success model choice))))))
             (cond ((getf value :model) (pick (getf value :model)))
+                  ;; A provider a folder not installed here serves: the
+                  ;; folder first, then what the provider asks for.
+                  ((getf value :install) (connect-install model dialog row))
                   ;; A provider whose key answers is a pick, not a key to paste
                   ;; again: Enter picks it. Ctrl+E pastes a new one.
                   ((getf value :connected) (pick (getf value :provider)))
@@ -10209,7 +10279,7 @@ showing for one to mean anything else."
             (if on-save
                 (funcall on-save model (connect-dialog-provider-id dialog) secret #'done)
                 (done model "no credential sink is wired" t)))))
-       (:checking nil)
+       ((:checking :installing) nil)
        ;; a check nothing listened for is checked again, the same key
        (:result (if-let (secret (connect-dialog-retry dialog))
                   (progn (connect-enter-step dialog :api-key)

@@ -570,6 +570,9 @@ of stacking."
      ;; control-cells-test follows cells-test: it writes its scratch
      ;; release with that file's folder and hub-index writers.
      (:file "surface/control-cells-test")
+     ;; provider-offers-test follows control-cells-test: it clones with
+     ;; cells-test's hub fixtures and opens ui-test's frame-model wizard.
+     (:file "surface/provider-offers-test")
      (:file "surface/settings-test")
      ;; Quick TUI settings gates reuse the canonical route's isolated fixture.
      (:file "tui/settings-test")

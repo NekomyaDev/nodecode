@@ -2599,8 +2599,9 @@ caches: each (provider, model) with its name and context budget when known,
 each provider whose listing failed with why, and each provider this image
 drives (connected: CONNECTED-PROVIDER-IDS, listable: LISTABLE-PROVIDER-IDS)
 and the default model's, each with why no turn can run on it when none can
-(SELECTION-REFUSAL) -- the facts an attached shell reads, since a cell's
-lanes and inventory hooks run here only."
+(SELECTION-REFUSAL), and each provider a folder not installed here serves
+(PROVIDER-OFFERS), which picking installs -- the facts an attached shell
+reads, since a cell's lanes and inventory hooks run here only."
   (:route :get "/api/gateway/models" "model catalog")
   (loop with connected = (connected-provider-ids)
         with listable = (listable-provider-ids)
@@ -2634,7 +2635,16 @@ lanes and inventory hooks run here only."
                                                 ;; in the words that say what to do.
                                                 "ready" (not refusal)
                                                 :opt "refusal" refusal))
-                                 'vector)))))
+                                 'vector)
+                         "offers" (map 'vector
+                                       (lambda (offer)
+                                         (json-object "cell" (getf offer :cell)
+                                                      :opt "commit" (getf offer :commit)
+                                                      "provider" (getf offer :provider)
+                                                      "name" (getf offer :name)
+                                                      "sign_in" (getf offer :sign-in)
+                                                      "description" (getf offer :description)))
+                                       (ignore-errors (provider-offers)))))))
 
 ;;; --- slash commands ---------------------------------------------------------
 ;;; The catalog a channel publishes as its platform's command menu, one line

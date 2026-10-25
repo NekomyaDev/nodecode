@@ -3323,6 +3323,13 @@ models -- so a shell never builds the list itself.")
           :refusals (loop for provider across (or (gethash "providers" body) #())
                           for why = (gethash "refusal" provider)
                           when (stringp why) collect (cons (gethash "id" provider) why))
+          ;; Each provider a folder not installed there serves, which picking
+          ;; installs (PROVIDER-OFFERS' plists).
+          :offers (loop for offer across (or (gethash "offers" body) #())
+                        collect (list :cell (gethash "cell" offer) :commit (gethash "commit" offer)
+                                      :provider (gethash "provider" offer) :name (gethash "name" offer)
+                                      :sign-in (or (gethash "sign_in" offer) "key")
+                                      :description (gethash "description" offer)))
           ;; A gateway older than the providers field sends none: what it
           ;; has keys for is unknown here, not none.
           :unreported (not (nth-value 1 (gethash "providers" body))))))
@@ -3382,6 +3389,25 @@ run -- builds them from MODEL-CHOICES; a shell reads them from it
 (defun picker-listable-provider-ids ()
   "LISTABLE-PROVIDER-IDS as the serving image answers it."
   (if *serving* (listable-provider-ids) (getf *gateway-models* :listable)))
+
+(defun picker-provider-offers ()
+  "PROVIDER-OFFERS as the serving image answers it."
+  (if *serving* (ignore-errors (provider-offers)) (getf *gateway-models* :offers)))
+
+(defun install-offered-cell (model offer)
+  "Install OFFER's folder (PROVIDER-OFFERS) through MODEL's organism at the
+pin the picker read, then read its models and its commands again, the
+folder's own among them: => (:COMMANDS ENTRIES), or (:REFUSED WHY)."
+  ;; Off the loop: a hub install clones before it loads.
+  (handler-case
+      (progn (gateway-model-http-call model :post "/api/gateway/cells"
+                                      (json-object "name" (getf offer :cell) "on" t
+                                                   :opt "commit" (getf offer :commit))
+                                      :read-timeout 300)
+             ;; the folder is in: a reread that fails leaves the lists in hand
+             (ignore-errors (fetch-gateway-models model))
+             (list :commands (ignore-errors (gateway-command-entries model))))
+    (gateway-http-error (refusal) (list :refused (gateway-http-error-detail refusal)))))
 
 (defun picker-local-provider-ids (rows)
   "The providers of ROWS, /models' model rows, served from a machine of the
@@ -4882,6 +4908,8 @@ the list on both shells)."
   ;; catalog too, and says so (PROVIDER-ID-REFUSAL) rather than saving a key
   ;; no lane could use.
   ;; Sorted by display name then id: Zig walked a map order a Lisp hash table lacks.
+  ;; A provider an uninstalled folder serves is listed too, and picking it
+  ;; installs that folder (PICKER-PROVIDER-OFFERS).
   (let ((catalog (models-catalog-table))
         ;; The ids worth a PROVIDER-AUTH-STATE probe, which opens a file per
         ;; call.
@@ -4954,6 +4982,28 @@ the list on both shells)."
                  (format nil "~d model~:p  ~a" (models id)
                          (or (key-check-state id)
                              (if (eq state :none) "configured" "connected")))))))
+      ;; A provider a folder not installed here serves (PROVIDER-OFFERS):
+      ;; Enter installs the folder first (CONNECT-INSTALL). Its models.dev row,
+      ;; when it has one, becomes the folder's -- a key saved from that row
+      ;; alone reached a lane that cannot talk to it (OpenCode Go answers 400
+      ;; MissingSessionID) -- and one models.dev lacks (ChatGPT's Codex) is
+      ;; listed by the name its folder gives it.
+      (dolist (offer (picker-provider-offers))
+        (let* ((id (getf offer :provider))
+               (how (getf offer :sign-in))
+               (says (if (uiop:string-prefix-p "/" how)
+                         (format nil "installs ~a, then ~a" (getf offer :cell) how)
+                         (format nil "installs ~a when picked" (getf offer :cell))))
+               (held (find-if (lambda (row)
+                                (and (string-equal id (provider row))
+                                     (not (getf (picker-row-value row) :install))))
+                              rows)))
+          (if held
+              (setf (picker-row-value held) (list* :install offer (picker-row-value held))
+                    (picker-row-detail held) (format nil "~a  ~a" (picker-row-detail held) says))
+              (push (make-picker-row :label (getf offer :name) :detail says
+                                     :value (list :provider id :install offer))
+                    rows))))
       (let* ((sorted (stable-sort (sort rows #'string-lessp :key #'provider)
                                   (lambda (a b &aux (at (pin a)) (bt (pin b)))
                                     (cond ((and at bt) (< at bt))
@@ -4988,6 +5038,19 @@ the list on both shells)."
                                 :detail "Enter a provider id from models.dev"
                                 :value (list :custom t))))))))
 
+(defun gateway-key-check (model provider key)
+  "PROVIDER-KEY-CHECK of KEY for PROVIDER as MODEL's organism answers it
+(POST /api/gateway/keys, check: true), as the list (VERDICT WORDS) the
+/models sink reads: VERDICT NIL when nothing was asked."
+  (let ((answer (gateway-model-http-call model :post "/api/gateway/keys"
+                                         (json-object "provider" provider "key" (nlk:trimmed key) "check" t)
+                                         :read-timeout (+ *provider-models-fetch-timeout-seconds* 15))))
+    (list (cdr (assoc (json-value answer :string "verdict")
+                      '(("works" . :works) ("refused" . :refused)
+                        ("unreachable" . :unreachable) ("unchecked" . :unchecked))
+                      :test #'equal))
+          (json-value answer :string "words"))))
+
 (defun connect-credential-sink (&optional saved)
   "The /models wizard's ON-SAVE: ask the provider whether it takes the key
 (PROVIDER-KEY-CHECK, off the loop), then SAVE-PROVIDER-API-KEY into the
@@ -5000,10 +5063,15 @@ start, and the same key is checked again -- else T."
   ;; (a hang, a 5xx, a 404, or the check itself failing) may still be right:
   ;; it is saved, the message says it was not checked and why, and
   ;; *KEY-CHECKS* keeps it off the list's `connected'.
+  ;; A shell asks its organism (GATEWAY-KEY-CHECK): the address a key is
+  ;; checked at is the one a turn dials, and a cell that serves the provider
+  ;; sets it there only -- OpenCode Go's, checked at models.dev's, answered 404.
   (lambda (model provider-id secret done)
     (off-loop
      model
-     (lambda () (multiple-value-list (provider-key-check provider-id (nlk:trimmed secret))))
+     (lambda () (if *serving*
+                    (multiple-value-list (provider-key-check provider-id (nlk:trimmed secret)))
+                    (gateway-key-check model provider-id secret)))
      ;; VALUE is the check's two values as a list, or OFF-LOOP's failure,
      ;; which is said plainly: its text is a Lisp condition's.
      (lambda (model value)
