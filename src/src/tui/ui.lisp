@@ -9041,7 +9041,7 @@ it answers. No row, or no handler: nothing happens."
          t)
         (dialog.input-label (setf dialog.input (concatenate 'string dialog.input line)) t)
         ((and (connect-dialog-p dialog)
-              (member (connect-dialog-step dialog) '(:result :checking :installing)))
+              (member (connect-dialog-step dialog) '(:result :checking :installing :signing-in)))
          nil)
         ((picker-dialog-searchable dialog)
          (picker-search-mutate dialog (clip (concatenate 'string dialog.search line)
@@ -9621,11 +9621,11 @@ result breaks to, a blank, the muted context -- or NIL for a list body."
                          (if (plusp (length value)) (seg value :composer) (seg "(empty)" :muted)))
                    dialog.input-context)))
         ((and (connect-dialog-p dialog)
-              (member (connect-dialog-step dialog) '(:result :checking :installing)))
+              (member (connect-dialog-step dialog) '(:result :checking :installing :signing-in)))
          ;; A result's words break to the panel's width, as a toast's
          ;; do, and MORE carries the lines after the first: a refusal
          ;; ran its remedy off the edge, past column 72 at 80 columns.
-         (let* ((checking (member (connect-dialog-step dialog) '(:checking :installing)))
+         (let* ((checking (member (connect-dialog-step dialog) '(:checking :installing :signing-in)))
                 (room (max 8 (docked-panel-room width)))
                 (lines (if checking
                            (list (connect-checking-clock dialog))
@@ -9634,11 +9634,20 @@ result breaks to, a blank, the muted context -- or NIL for a list body."
            (values (list (seg (or (first lines) "")
                               (if checking :muted :danger)))
                    (connect-provider-name dialog)
-                   (rest lines)))))
+                   (if (eq :signing-in (connect-dialog-step dialog))
+                       ;; under the clock, what the folder's sign-in said --
+                       ;; the address to open, a device code -- whole, an
+                       ;; address a link on every line it breaks over
+                       (loop for line in (split-lines (connect-dialog-result-message dialog))
+                             for link = (and (uiop:string-prefix-p "http" line) line)
+                             nconc (loop for piece in (wrapped-lines line room)
+                                         collect (list (make-seg :text piece :tone :foreground :link link))))
+                       (rest lines))))))
     (when lead
       (append (list (docked-panel-row lead width surface))
               (loop for line in more
-                    collect (docked-panel-row (list (seg line :danger)) width surface))
+                    collect (docked-panel-row (if (stringp line) (list (seg line :danger)) line)
+                                              width surface))
               (list (docked-panel-row '() width surface))
               (when (plusp (length context))
                 (list (docked-panel-row (list (seg context :muted)) width surface)))))))
@@ -10013,6 +10022,12 @@ picker's own ceiling thumb."
      :subtitle "Installing ~a~@[ at ~a~], the cell that serves this provider."
      :hint "esc back"
      :empty-label "")
+    (:signing-in
+     :context "Sign in"
+     ;; a control string: CONNECT-SIGN-IN fills in the provider
+     :subtitle "Signing in to ~a."
+     :hint "esc back"
+     :empty-label "")
     (:result
      :context "Errors"
      :subtitle "Credential setup needs attention."
@@ -10048,9 +10063,9 @@ slots the panel already reads."
   ;; The check says how long it waits and counts up to it, as the import's
   ;; does: a static `checking...' would read as a hang. The tick repaints
   ;; when the tenth shown moves.
-  (setf (connect-dialog-checking-since dialog) (and (member step '(:checking :installing))
+  (setf (connect-dialog-checking-since dialog) (and (member step '(:checking :installing :signing-in))
                                                     (get-internal-real-time))
-        dialog.on-tick (and (member step '(:checking :installing))
+        dialog.on-tick (and (member step '(:checking :installing :signing-in))
                             (let ((shown nil))
                               (lambda (model dialog &aux (now (connect-checking-clock dialog)))
                                 (declare (ignore model))
@@ -10070,8 +10085,12 @@ slots the panel already reads."
 
 (defun connect-checking-clock (dialog &aux (since (connect-dialog-checking-since dialog)))
   "`checking… 1.3s', the checking step's body line, counting from when the
-step began; `installing… 1.3s' on the installing step."
-  (format nil "~:[checking~;installing~]… ~a" (eq :installing (connect-dialog-step dialog))
+step began; `installing… 1.3s' on the installing step, `waiting for the
+sign-in… 1.3s' on the sign-in step."
+  (format nil "~a… ~a" (case (connect-dialog-step dialog)
+                         (:installing "installing")
+                         (:signing-in "waiting for the sign-in")
+                         (t "checking"))
           (format-turn-elapsed (if since (since-ms since) 0))))
 
 (defun connect-provider-name (dialog)
@@ -10140,11 +10159,10 @@ refused install says why over the list, and nothing else moved."
                          (set-gateway-commands commands))
                        (setf dialog.rows (funcall (connect-dialog-provider-rows dialog)))
                        (cond
-                         ;; the folder signs in with a command of its own: the
-                         ;; list closes and the command runs, as if typed
+                         ;; the folder signs in with a command of its own:
+                         ;; it runs, and the wizard waits on its words
                          ((and (not key) (uiop:string-prefix-p "/" how))
-                          (dismiss-dialog model dialog.on-cancel)
-                          (submit-slash model how))
+                          (connect-sign-in model dialog how))
                          ;; it answers already -- a key it had, or a login
                          ;; its folder brings, which the reread rows say: a
                          ;; pick, as Enter on a connected provider is
@@ -10160,6 +10178,47 @@ refused install says why over the list, and nothing else moved."
                          (t (connect-ask-key dialog row)))))
                     (render-state model)))))
   t)
+
+(defparameter *connect-sign-in-poll-seconds* 2
+  "How long CONNECT-SIGN-IN waits between two reads of whether the provider
+answers yet.")
+
+(defun connect-sign-in (model dialog how &aux (id (connect-dialog-provider-id dialog)))
+  "Run HOW, the command a folder just installed signs in with, and wait on
+DIALOG for its provider to answer: what the command said -- the address to
+open, a device code -- stands in the panel, and once the gateway's list reads
+the provider connected the pick goes on to its models, as Enter on a
+connected provider does. Esc goes back to the list (CONNECT-BACK), the
+folder's sign-in still waiting without it."
+  ;; Each read lands on the loop, which decides whether to read again: the
+  ;; worker never looks at the dialog.
+  (labels ((ours (model) (and (eq dialog (chat-model-dialog model))
+                              (eq :signing-in (connect-dialog-step dialog))))
+           (wait (model)
+             (off-loop model
+                       (lambda ()
+                         (sleep *connect-sign-in-poll-seconds*)
+                         (fetch-gateway-models model)
+                         (and (member id (picker-connected-provider-ids) :test #'string-equal) t))
+                       (lambda (model connected)
+                         (cond ((not (ours model)) :quiet)
+                               ((eq t connected)
+                                (let ((on-success (connect-dialog-on-success dialog)))
+                                  (dismiss-dialog model (and on-success
+                                                             (lambda (model) (funcall on-success model id)))))
+                                (render-state model))
+                               (t (wait model) :quiet))))))
+    (connect-enter-step dialog :signing-in)
+    (setf dialog.subtitle (format nil dialog.subtitle (connect-provider-name dialog)))
+    (off-loop model
+              (lambda () (json-value (gateway-slash-answer model how) :string "text"))
+              (lambda (model text &aux (failure (off-loop-failure text)))
+                (cond ((not (ours model)) :quiet)
+                      (t (setf (connect-dialog-result-message dialog)
+                               (if failure (format nil "~a: ~a" how failure) (or text "")))
+                         ;; a refused command has nothing to wait for
+                         (unless failure (wait model))
+                         (render-state model)))))))
 
 (defun connect-back (model dialog)
   "One step back (the Zig backConnectDialog): from the provider step the
@@ -10183,6 +10242,11 @@ checked."
     (:checking (connect-enter-step dialog :api-key))
     ;; the install goes on in the organism; its answer finds the list
     (:installing
+     (connect-clear-credential dialog)
+     (connect-enter-step dialog :provider))
+    ;; the folder's sign-in goes on waiting; the list takes nothing from it
+    (:signing-in
+     (setf (connect-dialog-result-message dialog) "")
      (connect-clear-credential dialog)
      (connect-enter-step dialog :provider))
     (:result

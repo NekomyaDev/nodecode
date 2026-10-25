@@ -157,39 +157,74 @@
 
 (deftest connect-enter-on-an-offered-provider-installs-its-folder-then-signs-in ()
   ;; Enter installs the folder through the organism, at the pin the list
-  ;; read, then goes on as the provider asks: its key step, or the list
-  ;; closes and the folder's sign-in command runs. A refused install says
-  ;; why over the list and moves nothing else.
-  (let ((installed '()) (typed '()))
+  ;; read, then goes on as the provider asks: here its key step (a sign-in
+  ;; command's wait is CONNECT-SIGN-IN's gate). A refused install says why
+  ;; over the list and moves nothing else.
+  (let ((installed '()))
     (with-stubbed-fdefinitions ((nle::install-offered-cell (model offer)
                                   model
                                   (push offer installed)
                                   (if (equal "nl-cell-gone" (getf offer :cell))
                                       (list :refused "the hub has no nl-cell-gone")
-                                      (list :commands '())))
-                                (nle::submit-slash (model text)
-                                  model
-                                  (push text typed)
-                                  (values t nil)))
+                                      (list :commands '()))))
       (with-frame-model (model 100 30 :session-id "offer-key")
         (let ((dialog (open-offer-wizard model (go-offer))))
           (dialog-keys model :enter)
           (is (equal (list (go-offer)) installed) "the folder, at the pin the list read")
           (is (eq :api-key (nle::connect-dialog-step dialog)) "then its key")
           (is (equal "nl-go" (nle::connect-dialog-provider-id dialog)))))
-      (with-frame-model (model 100 30 :session-id "offer-command")
-        (open-offer-wizard model (go-offer :provider "nl-codex" :cell "nl-cell-codex"
-                                           :sign-in "/nl-codex login"))
-        (dialog-keys model :enter)
-        (is (equal "nl-cell-codex" (getf (first installed) :cell)))
-        (is (null model.dialog) "the list closes")
-        (is (equal '("/nl-codex login") typed) "and the folder's sign-in runs"))
       (with-frame-model (model 100 30 :session-id "offer-refused")
         (let ((dialog (open-offer-wizard model (go-offer :cell "nl-cell-gone"))))
           (dialog-keys model :enter)
           (is (eq :provider (nle::connect-dialog-step dialog)) "back on the list")
           (is (rows-carry-p "nl-cell-gone was not installed: the hub has no nl-cell-gone"
                             (nle::compose-frame model))))))))
+
+(deftest connect-an-offered-provider-signs-in-in-the-wizard-then-goes-on-to-its-models ()
+  ;; A folder that signs in with a command (Codex's /openai-codex login):
+  ;; once it is in, the command runs and the wizard stays open on what it
+  ;; said -- the address to open, whole -- until the gateway's list reads the
+  ;; provider connected; then the pick goes on to its models. It used to
+  ;; close the list and run the command, which ended a setup walk on its
+  ;; summary with the address cut off in the status line.
+  (let ((ran '()) (picked '()) (reads 0) (seen nil)
+        (address "https://auth.example.test/authorize?client_id=nl&state=0123456789abcdef"))
+    (with-stubbed-fdefinitions ((nle::install-offered-cell (model offer)
+                                  model offer
+                                  (list :commands '()))
+                                (nle::gateway-slash-answer (model line)
+                                  model
+                                  (push line ran)
+                                  (nlk:decode-json
+                                   (format nil "{\"text\": \"Open this address to sign in:\\n\\n~a\"}" address)))
+                                (nle::picker-connected-provider-ids ()
+                                  (incf reads)
+                                  (if (= reads 1) '() '("nl-codex"))))
+      (let ((nle::*connect-sign-in-poll-seconds* 0))
+        (with-frame-model (model 100 30 :session-id "offer-sign-in")
+          (nle::open-connect-dialog
+           model (lambda ()
+                   (list (nle::make-picker-row
+                          :label "NL Codex"
+                          :value (list :provider "nl-codex"
+                                       :install (go-offer :provider "nl-codex" :cell "nl-cell-codex"
+                                                          :sign-in "/nl-codex login")))))
+           (nlk:lambda-ignoring (model provider-id secret done) nil)
+           (lambda (model &optional provider) model (push provider picked)))
+          (with-stubbed-fdefinition (nle::fetch-gateway-models (m)
+                                      ;; the first read: the panel waits on the folder's words
+                                      (when (and (= reads 0) (null seen))
+                                        (setf seen (list (nle::connect-dialog-step (nle::chat-model-dialog m))
+                                                         (rows-carry-p "Open this address to sign in:"
+                                                                       (nle::compose-frame m))
+                                                         (rows-carry-p "https://auth.example.test/authorize?"
+                                                                       (nle::compose-frame m)))))
+                                      nil)
+            (dialog-keys model :enter))
+          (is (equal '("/nl-codex login") ran) "the folder's sign-in runs once")
+          (is (equal '(:signing-in t t) seen) "the wizard waits on what it said, the address whole")
+          (is (equal '("nl-codex") picked) "once it answers, the pick goes on to its models")
+          (is (null model.dialog)))))))
 
 (deftest control-keys-check-answers-the-verdict-and-saves-nothing (with-temp-gateway (port))
   ;; A shell asks here whether a key works: the address a turn dials is set
