@@ -92,12 +92,32 @@
              (codex (find "NL Codex" rows :key #'nle::picker-row-label :test #'equal))
              (acme (find "Acme Labs" rows :key #'nle::picker-row-label :test #'equal)))
         (is (= 1 (count "NL Go" rows :key #'nle::picker-row-label :test #'equal)) "one row, not two")
-        (is (equal "1 model  installs nl-cell-go when picked" (nle::picker-row-detail go)))
+        (is (equal "1 model" (nle::picker-row-detail go)) "the row says nothing of the install")
         (is (equal "nl-cell-go" (getf (getf (nle::picker-row-value go) :install) :cell)))
         (is (equal "nl-go" (getf (nle::picker-row-value go) :provider)))
-        (is (equal "installs nl-cell-codex, then /nl-codex login" (nle::picker-row-detail codex)))
+        (is (equal "" (nle::picker-row-detail codex)))
         (is (equal "nl-codex" (getf (nle::picker-row-value codex) :provider)))
         (is (null (getf (nle::picker-row-value acme) :install)) "a provider no folder serves is as it was")))))
+
+(deftest a-walk-provider-list-takes-the-offers-the-gateway-list-brings ()
+  ;; The setup walk's provider list (a connect dialog of no kind) opens
+  ;; before the gateway's list lands, and the offers come with that list:
+  ;; its landing restocks the walk as it does /models', or a fresh home's
+  ;; walk never lists OpenCode Go's or Codex's folder.
+  (let ((offers '()))
+    (with-frame-model (model 100 30 :session-id "offer-walk")
+      (nle::open-connect-dialog
+       model (lambda ()
+               (loop for offer in offers
+                     collect (nle::make-picker-row :label (getf offer :name)
+                                                   :value (list :provider (getf offer :provider)
+                                                                :install offer))))
+       (nlk:lambda-ignoring (model provider-id secret done) nil)
+       nil)
+      (is (null (nle::picker-dialog-rows model.dialog)) "nothing landed yet")
+      (setf offers (list (go-offer)))
+      (nle::install-refreshed-models model)
+      (is (equal '("NL Go") (mapcar #'nle::picker-row-label (nle::picker-dialog-rows model.dialog))) "the landed list's offer is listed"))))
 
 (defun open-offer-wizard (model offer)
   "The /models wizard over MODEL listing OFFER's provider as the picker does;

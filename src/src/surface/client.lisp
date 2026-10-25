@@ -3887,7 +3887,7 @@ a provider's key."
   "Refill DIALOG, MODEL's open /models list, in place: its provider step's rows, else the
 catalog under its frequently used head, the cursor back on VALUE's row past the headings
 -- or, with TOP, on the first row."
-  (setf dialog.rows (if (eq dialog.kind :model-providers)
+  (setf dialog.rows (if (connect-dialog-p dialog)
                         (funcall (connect-dialog-provider-rows dialog))
                         (models-frequent-picker-rows
                          (models-dialog-catalog-rows dialog)
@@ -4073,16 +4073,19 @@ place, the search text stays, and the selection follows its row value — a
 value the refresh dropped leaves the cursor on its seat."
   (declare (ignore landed))
   (when (and (picker-dialog-p dialog)
-             ;; The /models catalog in either mode.
+             ;; The /models catalog in either mode, or a provider list: /models'
+             ;; or the setup walk's, which has no kind and opens before the
+             ;; gateway's list lands -- its offers (PROVIDER-OFFERS) came with
+             ;; it, and a walk that kept its first rows never listed them.
              (or (member dialog.kind '(:models :auxiliary-models))
-                 (and (eq dialog.kind :model-providers)
+                 (and (connect-dialog-p dialog)
                       (eq :provider (connect-dialog-step dialog)))))
-    (setf dialog.title (if (eq dialog.kind :model-providers) "Models"
-                           (models-picker-title (length (models-dialog-catalog-rows dialog)) nil
-                                                :auxiliary (eq dialog.kind :auxiliary-models))))
-    ;; a list opened before anything was cached said it was loading
-    (unless (eq dialog.kind :model-providers)
-      (setf dialog.empty-label "No models found"))
+    (cond ((eq dialog.kind :model-providers) (setf dialog.title "Models"))
+          ((not (connect-dialog-p dialog))
+           (setf dialog.title (models-picker-title (length (models-dialog-catalog-rows dialog)) nil
+                                                   :auxiliary (eq dialog.kind :auxiliary-models))
+                 ;; a list opened before anything was cached said it was loading
+                 dialog.empty-label "No models found")))
     (restock-models-dialog model dialog (picker-highlighted-value dialog))))
 
 (defparameter +new-profile-action+ :new-profile
@@ -4987,21 +4990,17 @@ the list on both shells)."
       ;; when it has one, becomes the folder's -- a key saved from that row
       ;; alone reached a lane that cannot talk to it (OpenCode Go answers 400
       ;; MissingSessionID) -- and one models.dev lacks (ChatGPT's Codex) is
-      ;; listed by the name its folder gives it.
+      ;; listed by the name its folder gives it. The row says nothing of the
+      ;; install: picking it is the whole of it (peasantry1833: "Less is more").
       (dolist (offer (picker-provider-offers))
         (let* ((id (getf offer :provider))
-               (how (getf offer :sign-in))
-               (says (if (uiop:string-prefix-p "/" how)
-                         (format nil "installs ~a, then ~a" (getf offer :cell) how)
-                         (format nil "installs ~a when picked" (getf offer :cell))))
                (held (find-if (lambda (row)
                                 (and (string-equal id (provider row))
                                      (not (getf (picker-row-value row) :install))))
                               rows)))
           (if held
-              (setf (picker-row-value held) (list* :install offer (picker-row-value held))
-                    (picker-row-detail held) (format nil "~a  ~a" (picker-row-detail held) says))
-              (push (make-picker-row :label (getf offer :name) :detail says
+              (setf (picker-row-value held) (list* :install offer (picker-row-value held)))
+              (push (make-picker-row :label (getf offer :name)
                                      :value (list :provider id :install offer))
                     rows))))
       (let* ((sorted (stable-sort (sort rows #'string-lessp :key #'provider)
