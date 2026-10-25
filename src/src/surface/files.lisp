@@ -44,10 +44,6 @@
   "Refuse the request as STATUS with CODE, the formatted text its message."
   (error 'folder-refused :status status :code code :detail (apply #'format nil control args)))
 
-(defparameter +folder-separators+ #+win32 "/\\" #-win32 "/"
-  "What separates the steps of a path the page names: `/', and on Windows
-`\\' as well, which Windows walks as it walks `/'.")
-
 (defun session-workspace-directory (session-id &aux (cwd (nlk:find-session-cwd session-id)))
   "SESSION-ID's durable workspace when it is an absolute directory name, else
 NIL."
@@ -55,9 +51,9 @@ NIL."
   ;; process's own directory, which is a live checkout often enough. On
   ;; Windows an absolute one leads with a drive, C:\ or C:/, or a share's \\.
   (and (stringp cwd) (plusp (length cwd))
-       (or (find (char cwd 0) +folder-separators+)
+       (or (find (char cwd 0) nlk::+path-separators+)
            #+win32 (and (< 2 (length cwd)) (alpha-char-p (char cwd 0)) (char= #\: (char cwd 1))
-                        (find (char cwd 2) +folder-separators+)))
+                        (find (char cwd 2) nlk::+path-separators+)))
        cwd))
 
 (defun session-folder (session-id)
@@ -93,8 +89,8 @@ stream's."
   #+win32 (when (find #\: rel)
             (folder-refuse 400 "invalid_path" "a path holds no colon"))
   (let ((steps (remove-if (lambda (step) (member step '("" ".") :test #'string=))
-                          (uiop:split-string rel :separator +folder-separators+))))
-    (when (or (and (plusp (length rel)) (find (char rel 0) +folder-separators+))
+                          (uiop:split-string rel :separator nlk::+path-separators+))))
+    (when (or (and (plusp (length rel)) (find (char rel 0) nlk::+path-separators+))
               (member ".." steps :test #'string=))
       (folder-refuse 403 "outside_folder" "the path ~a leads outside the session's folder" rel))
     steps))

@@ -808,9 +808,18 @@ it: the next probe of that path asks the file again."
 ;;; Joined and compared as strings and never parsed, so `*' and `[' are only
 ;;; characters in a name, which a pathname would read as wildcards.
 
-(defun native-path (path)
-  "PATH — a string or a pathname — as a native path with no trailing slash."
-  (string-right-trim "/" (if (pathnamep path) (sb-ext:native-namestring path) path)))
+(defparameter +path-separators+ #+win32 "/\\" #-win32 "/"
+  "What separates the steps of a path: `/', and on Windows `\\' as well, which
+Windows walks as it walks `/'.")
+
+(defun native-path (path &aux (native (string-right-trim +path-separators+
+                                                         (if (pathnamep path) (sb-ext:native-namestring path) path))))
+  "PATH — a string or a pathname — as a native path with no trailing slash
+but a Windows drive's root, which keeps its own."
+  ;; Windows spells a directory with a closing `\', and its stat refuses one
+  ;; that keeps it: a session's folder answered 404 at its own root.
+  #+win32 (if (and (= (length native) 2) (char= #\: (char native 1))) (concatenate 'string native "\\") native)
+  #-win32 native)
 
 (defun path-under (root path)
   "PATH, relative and `/'-separated, under ROOT, a native directory with no
@@ -822,18 +831,17 @@ characters in a name."
   "PATH without its last `/'-separated step, or NIL when it has only one."
   (and slash (subseq path 0 slash)))
 
-(defun path-within-p (path directory &aux (separators #+win32 "/\\" #-win32 "/"))
+(defun path-within-p (path directory)
   "Whether the native PATH is DIRECTORY or lies beneath it, both with no
 trailing slash but a Windows drive's root, which keeps its own."
-  ;; A native path on Windows is spelled with `\' (REAL-PATH's), and Windows
-  ;; walks `/' as it walks `\': held to `/' alone, nothing beneath a folder
-  ;; there lay beneath it.
+  ;; A native path on Windows is spelled with `\' (REAL-PATH's): held to `/'
+  ;; alone, nothing beneath a folder there lay beneath it.
   (or (string= path directory)
       (and (< (length directory) (length path))
            (uiop:string-prefix-p directory path)
-           (or (find (char path (length directory)) separators)
+           (or (find (char path (length directory)) +path-separators+)
                (and (plusp (length directory))
-                    (find (char directory (1- (length directory))) separators))))))
+                    (find (char directory (1- (length directory))) +path-separators+))))))
 
 (defun directory-names (directory)
   "The names in the native DIRECTORY, `.' and `..' aside; NIL when it cannot
