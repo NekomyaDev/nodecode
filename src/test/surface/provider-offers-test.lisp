@@ -119,6 +119,31 @@
       (nle::install-refreshed-models model)
       (is (equal '("NL Go") (mapcar #'nle::picker-row-label (nle::picker-dialog-rows model.dialog))) "the landed list's offer is listed"))))
 
+(deftest connect-an-offered-provider-its-folder-signs-in-goes-on-to-its-models ()
+  ;; Claude Code's folder brings the claude CLI's own login: no key, no
+  ;; command. Once it is in, the reread rows list the provider connected,
+  ;; and the pick goes on to its models as Enter on a connected provider does.
+  (let ((in nil) (picked '()))
+    (with-stubbed-fdefinitions ((nle::install-offered-cell (model offer)
+                                  model offer
+                                  (setf in t)
+                                  (list :commands '())))
+      (with-frame-model (model 100 30 :session-id "offer-own-login")
+        (nle::open-connect-dialog
+         model (lambda ()
+                 (list (nle::make-picker-row
+                        :label "NL Claude"
+                        :value (if in
+                                   (list :provider "nl-claude" :connected t)
+                                   (list :provider "nl-claude"
+                                         :install (go-offer :provider "nl-claude" :cell "nl-cell-claude"))))))
+         (nlk:lambda-ignoring (model provider-id secret done) nil)
+         (lambda (model &optional provider) model (push provider picked)))
+        (dialog-keys model :enter)
+        (is in "the folder is installed")
+        (is (equal '("nl-claude") picked) "then the pick goes on to its models")
+        (is (null model.dialog) "with no key asked")))))
+
 (defun open-offer-wizard (model offer)
   "The /models wizard over MODEL listing OFFER's provider as the picker does;
 => the dialog."

@@ -10109,8 +10109,9 @@ provider's id, a provider's key. Any other row moves nothing."
   "Enter on ROW, a provider a folder not installed here serves
 (PICKER-PROVIDER-OFFERS): install that folder through the organism, off the
 loop (INSTALL-OFFERED-CELL), then go on as the provider asks -- the command
-its folder signs in with, a pick when a key it has already answers, else its
-key step. KEY, Ctrl+E's, asks for a key whatever the folder signs in with. A
+its folder signs in with, a pick when it answers already (a key it has, or a
+login the folder brings: Claude Code's is the claude CLI's), else its key
+step. KEY, Ctrl+E's, asks for a key whatever the folder signs in with. A
 refused install says why over the list, and nothing else moved."
   (connect-clear-credential dialog)
   (setf (connect-dialog-provider-id dialog) id
@@ -10144,9 +10145,15 @@ refused install says why over the list, and nothing else moved."
                          ((and (not key) (uiop:string-prefix-p "/" how))
                           (dismiss-dialog model dialog.on-cancel)
                           (submit-slash model how))
-                         ;; a key already answers: a pick, as Enter on a
-                         ;; connected provider is
-                         ((and (not key) (getf value :connected))
+                         ;; it answers already -- a key it had, or a login
+                         ;; its folder brings, which the reread rows say: a
+                         ;; pick, as Enter on a connected provider is
+                         ((and (not key)
+                               (or (getf value :connected)
+                                   (find-if (lambda (row &aux (now (picker-row-value row)))
+                                              (and (equal id (getf now :provider))
+                                                   (getf now :connected)))
+                                            dialog.rows)))
                           (let ((on-success (connect-dialog-on-success dialog)))
                             (dismiss-dialog model (and on-success
                                                        (lambda (model) (funcall on-success model id))))))
