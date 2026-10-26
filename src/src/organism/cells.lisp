@@ -2276,12 +2276,13 @@ runs, as OFFER records by name, each marked as listed by INDEX."
      #'string< :key #'offer-name)))
 
 (defun hub-cells (&key (url *hub-index-url*) (community *community-index-url*)
-                        (shipped (shipped-cells)))
+                        (shipped (shipped-cells)) max-age)
   "The hub's entries this platform runs, as OFFER records by name: Nodecode's
 own (the index at URL), then the community's (at COMMUNITY) less any name
 Nodecode's lists; and as a second value why an index was read from its kept
 copy, or NIL. NIL when both are NIL; a signal naming the reason when no
-index asked for can be read."
+index asked for can be read. With MAX-AGE, an index whose kept copy a read
+wrote under MAX-AGE seconds ago is that copy, unread."
   ;; Each index answers for itself: one that cannot be read leaves the other's
   ;; entries on offer rather than hiding them, and only when every index asked
   ;; for fails is there nothing to offer and a reason to say so.
@@ -2294,21 +2295,25 @@ index asked for can be read."
                (incf asked)
                (let ((kept (home (format nil "hub/~a.json" (short-digest source 16)))))
                  (flet ((offers (text) (read-hub-index text :shipped shipped :index index)))
-                   (handler-case
-                       (bind (((body status _ truncated)
-                               (http :get source :max-bytes (* 1024 1024) :timeout 10)))
-                         (unless (eql status 200)
-                           (error "the hub index at ~a answered ~a" source status))
-                         (when truncated
-                           (error "the hub index at ~a is over a megabyte" source))
-                         (prog1 (offers body)
-                           (write-file-atomically kept body)))
-                     (error (condition)
-                       (if-let (copy (and (probe-file kept)
-                                          (ignore-errors
-                                           (offers (alexandria:read-file-into-byte-vector kept)))))
-                         (progn (push (princ-to-string condition) stale) copy)
-                         (progn (push condition failed) '())))))))))
+                   (or
+                    (and max-age (probe-file kept)
+                         (< (- (get-universal-time) (file-write-date kept)) max-age)
+                         (ignore-errors (offers (alexandria:read-file-into-byte-vector kept))))
+                    (handler-case
+                        (bind (((body status _ truncated)
+                                (http :get source :max-bytes (* 1024 1024) :timeout 10)))
+                          (unless (eql status 200)
+                            (error "the hub index at ~a answered ~a" source status))
+                          (when truncated
+                            (error "the hub index at ~a is over a megabyte" source))
+                          (prog1 (offers body)
+                            (write-file-atomically kept body)))
+                      (error (condition)
+                        (if-let (copy (and (probe-file kept)
+                                           (ignore-errors
+                                            (offers (alexandria:read-file-into-byte-vector kept)))))
+                          (progn (push (princ-to-string condition) stale) copy)
+                          (progn (push condition failed) '()))))))))))
       (let* ((own (entries url "hub"))
              (theirs (remove-if (lambda (entry) (find-offer (offer-name entry) own))
                                 (entries community "community"))))
@@ -2320,17 +2325,109 @@ index asked for can be read."
 (defun repository-links (directory)
   "The symbolic links under DIRECTORY, .git/ passed over, as `find' prints
 them. NIL on Windows, where a clone makes none."
+  ;; Walked in this process (TREE-ENTRIES), `find' only for a tree the walk
+  ;; cannot read: a child cost ~90 ms of a hub install on macOS.
   #+win32 (progn directory nil)
   #-win32
-  (remove "" (lines (run-bounded (list "find" (string-right-trim "/" (uiop:native-namestring directory))
-                                       "-name" ".git" "-prune" "-o" "-type" "l" "-print")
-                                 :seconds 120))
-          :test #'string=))
+  (let ((native (string-right-trim "/" (uiop:native-namestring directory))))
+    (labels ((walk (path)
+               (loop for (child . kind) in (tree-entries path)
+                     unless (string= ".git" (subseq child (1+ (position #\/ child :from-end t))))
+                       if (eq kind :link) collect child
+                       else if (eq kind :directory) append (walk child))))
+      (handler-case (walk native)
+        (error ()
+          (remove "" (lines (run-bounded (list "find" native "-name" ".git" "-prune" "-o" "-type" "l" "-print")
+                                         :seconds 120))
+                  :test #'string=))))))
+
+(defun repository-head (directory)
+  "The commit the repository at DIRECTORY has checked out detached, as its
+.git/HEAD names it; NIL when HEAD names a branch or cannot be read."
+  (let ((line (ignore-errors
+               (string-trim '(#\Newline #\Return #\Space)
+                            (uiop:read-file-string (merge-pathnames ".git/HEAD" directory))))))
+    (and line (ppcre:scan "^[0-9a-f]{40}\\z" line) line)))
+
+;;; --- the copy of a hub repository a home keeps ---------------------------------
+;;; Every folder Nodecode's index lists is a folder of one repository at one
+;;; commit. A clone per install fetched all of it again for each: 0.7 s on a
+;;; near network, 5-25 s on a far one. A home keeps one bare copy per
+;;; repository instead, holding each commit it was asked for one commit deep;
+;;; a folder checks out of it with no network, and a picker fetches the
+;;; commits its offers need as it opens (WARM-HUB-REPOSITORIES).
+
+(defvar *hub-repository-lock* (bt2:make-lock :name "hub repositories")
+  "Held while a copy of a hub repository fetches, so a pick and a picker's
+warm-up fetch one commit once.")
+
+(defun hub-git (arguments &optional environment)
+  "Git run with ARGUMENTS, never prompting and never collecting on its own,
+ENVIRONMENT (NAME=value strings) laid over: => its output. Signals its error
+output when it fails."
+  (multiple-value-bind (out err status)
+      (run-bounded (list* *git-program* "-c" "gc.auto=0" arguments) :seconds 600
+                   :environment (list* "GIT_TERMINAL_PROMPT=0" environment))
+    (unless (eql status 0)
+      (error "git ~a failed: ~a" (first arguments) (string-trim '(#\Newline) (or err ""))))
+    out))
+
+(defun hub-repository (entry home)
+  "The copy HOME keeps of hub ENTRY's repository, holding ENTRY's commit:
+made bare and fetched that one commit deep when it lacks it. => its
+directory; signals when git cannot."
+  (let* ((directory (merge-pathnames (format nil "hub/git/~a/" (short-digest (offer-git entry) 16)) home))
+         (native (string-right-trim "/\\" (uiop:native-namestring directory)))
+         (commit (offer-commit entry))
+         (ref (format nil "refs/pins/~a" commit)))
+    (bt2:with-lock-held (*hub-repository-lock*)
+      (unless (or (probe-file (merge-pathnames ref directory))
+                  (let ((packed (merge-pathnames "packed-refs" directory)))
+                    (and (probe-file packed)
+                         (search (format nil "~a ~a" commit ref) (uiop:read-file-string packed)))))
+        (unless (probe-file (merge-pathnames "HEAD" directory))
+          (ensure-directories-exist directory)
+          (hub-git (list "init" "--quiet" "--bare" native)))
+        (hub-git (list "-C" native "fetch" "--quiet" "--depth" "1" "--no-tags" "--" (offer-git entry)
+                       (format nil "+~a:~a" commit ref)))))
+    directory))
+
+(defun hub-repository-checkout (entry staging home)
+  "Write hub ENTRY's folder, its path at its commit, into STAGING out of the
+copy HOME keeps of its repository (HUB-REPOSITORY): => T, or NIL when that
+copy cannot give it, and the caller clones."
+  ;; Git writes the pin out of objects named by their own hashes: the folder
+  ;; is the commit's as surely as a clone's HEAD. The index is a throwaway in
+  ;; STAGING, so the copy, which has no work tree, keeps no state of a checkout.
+  (ignore-errors
+   (let ((repository (hub-repository entry home)))
+     (ensure-directories-exist staging)
+     (hub-git (list (format nil "--git-dir=~a" (string-right-trim "/\\" (uiop:native-namestring repository)))
+                    (format nil "--work-tree=~a" (string-right-trim "/\\" (uiop:native-namestring staging)))
+                    "checkout" "--quiet" (offer-commit entry) "--" (offer-path entry))
+              (list (format nil "GIT_INDEX_FILE=~a"
+                            (uiop:native-namestring (merge-pathnames ".git-index" staging)))))
+     t)))
+
+(defun warm-hub-repositories (offers &optional (root *cells-directory*))
+  "Fetch into the copies ROOT's home keeps (HUB-REPOSITORY) the commit of
+each folder of a repository among OFFERS that ROOT has not installed, so
+picking one checks it out with no network."
+  (when root
+    (let ((home (uiop:pathname-parent-directory-pathname root)) (fetched '()))
+      (dolist (entry offers)
+        (let ((key (cons (offer-git entry) (offer-commit entry))))
+          (when (and (offer-git entry) (offer-path entry)
+                     (not (member key fetched :test #'equal))
+                     (not (installed-cell-p (offer-name entry) root)))
+            (push key fetched)
+            (ignore-errors (hub-repository entry home))))))))
 
 (defun clone-install (entry target)
   "Clone the hub ENTRY at its commit and move it to TARGET, marked the
 installer's. => TARGET."
-  ;; The clone is proven before it moves: HEAD is the pinned commit, the
+  ;; The clone is proven before it moves: HEAD is the pinned commit (a folder
+  ;; checked out of the kept copy is the pin's by its objects' hashes), the
   ;; primary system is the entry's name and, for an entry an index listed,
   ;; its description, depends_on and serves are the index's, no symbolic link reaches
   ;; out of it, and every system it declares it needs is here. It is made in
@@ -2341,9 +2438,8 @@ installer's. => TARGET."
   ;; against; one that is a folder of it (its PATH) moves in alone, and the
   ;; rest of the clone goes. A clone runs no hook and fetches no submodule,
   ;; so nothing in it runs before the boot loader loads it.
-  (let* ((staging (merge-pathnames (format nil ".cell-staging/~a/" entry.name)
-                                   (uiop:pathname-parent-directory-pathname
-                                    (uiop:pathname-parent-directory-pathname target))))
+  (let* ((home (uiop:pathname-parent-directory-pathname (uiop:pathname-parent-directory-pathname target)))
+         (staging (merge-pathnames (format nil ".cell-staging/~a/" entry.name) home))
          (native (string-right-trim "/\\" (uiop:native-namestring staging)))
          (source (if entry.path (merge-pathnames (format nil "~a/" entry.path) staging) staging)))
     (flet ((git (verb &rest args)
@@ -2360,10 +2456,15 @@ installer's. => TARGET."
       (with-cleanup ((ignore-errors (when (probe-file staging) (remove-tree staging)))
                      (ignore-errors (uiop:delete-empty-directory
                                      (uiop:pathname-parent-directory-pathname staging))))
-        (git "clone" "--quiet" "--no-checkout" "--" entry.git native)
-        (git "checkout" "--quiet" "--detach" entry.commit)
-        (unless (string= entry.commit (git "rev-parse" "HEAD"))
-          (error "~a: HEAD is not ~a" entry.name entry.commit))
+        ;; A folder of a repository checks out of the copy this home keeps of
+        ;; it (HUB-REPOSITORY-CHECKOUT); a whole repository, which keeps its
+        ;; .git, and a folder that copy cannot give, clone.
+        (unless (and entry.path (hub-repository-checkout entry staging home))
+          (when (probe-file staging) (remove-tree staging))
+          (git "clone" "--quiet" "--no-checkout" "--" entry.git native)
+          (git "checkout" "--quiet" "--detach" entry.commit)
+          (unless (equal entry.commit (repository-head staging))
+            (error "~a: HEAD is not ~a" entry.name entry.commit)))
         ;; a folder the path reaches through a link would move from elsewhere
         (unless (and (probe-file source) (uiop:subpathp (truename source) (truename staging)))
           (error "~a: the repository has no folder ~a" entry.name entry.path))

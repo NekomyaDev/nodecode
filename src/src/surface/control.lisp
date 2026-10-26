@@ -481,12 +481,11 @@ loaded it already. Signals what the install refuses."
 and loaded into this image now, then started. =>
 what came of it, in a sentence. Refused when COMMIT, the pin a person read,
 is not the hub's now."
-  ;; A name the release does not ship is looked for on the hub, whose index is
-  ;; read now: its install clones from there anyway. INSTALL-CELL refuses a
-  ;; name on offer from neither and a folder whose dependencies this image
-  ;; cannot find.
+  ;; A name the release does not ship is looked for on the hub (HUB-OFFERS-FOR).
+  ;; INSTALL-CELL refuses a name on offer from neither and a folder whose
+  ;; dependencies this image cannot find.
   (unless (nlk:find-offer name offers)
-    (setf offers (append offers (nlk:hub-cells :shipped offers))))
+    (setf offers (append offers (hub-offers-for name commit offers))))
   (let ((entry (nlk:find-offer name offers)))
     (when (and commit entry (not (equal commit (nlk:offer-commit entry))))
       (nlk::protocol-refuse :refused "the hub moved ~a from ~a~@[ to ~a~] since it was read: nothing was installed; read it again"
@@ -573,10 +572,27 @@ the asking thread.")
 (defun read-provider-offers (&aux (shipped (nlk:shipped-cells)))
   "The release's folders and Nodecode's own index's entries (NLK:HUB-CELLS,
 its kept copy when the network fails it) into *PROVIDER-OFFERS*; the
-release's alone when no index can be read."
-  (setf *provider-offers*
-        (cons (get-universal-time)
-              (append shipped (ignore-errors (nlk:hub-cells :shipped shipped :community nil))))))
+release's alone when no index can be read. The commits the providers'
+folders sit at start fetching off this thread (NLK:WARM-HUB-REPOSITORIES),
+so a pick finds its folder at hand."
+  (let ((offers (append shipped (ignore-errors (nlk:hub-cells :shipped shipped :community nil)))))
+    (spawn "hub-warm-up"
+      (ignore-errors (nlk:warm-hub-repositories (remove-if-not #'nlk:offer-serves offers))))
+    (setf *provider-offers* (cons (get-universal-time) offers))))
+
+(defun hub-offers-for (name commit shipped)
+  "The hub's entries to turn NAME on from: the copy of Nodecode's own index
+read within +PROVIDER-OFFERS-SECONDS+ -- the picker's read -- when it pins
+NAME at COMMIT, the pin a person read; else both indexes, read now."
+  ;; A pick was two more index reads, own and community, 2.5-6.5 s from a far
+  ;; network, for the answer the picker read a moment before. Any other pin,
+  ;; or none, is the hub's now as before, so a pin the hub moved is refused.
+  (let* ((recent (and commit (ignore-errors (nlk:hub-cells :shipped shipped :community nil
+                                                           :max-age +provider-offers-seconds+))))
+         (entry (and recent (nlk:find-offer name recent))))
+    (if (and entry (equal commit (nlk:offer-commit entry)))
+        recent
+        (nlk:hub-cells :shipped shipped))))
 
 (defun provider-offers (&aux (memo *provider-offers*))
   "Every provider an offered folder this home has not installed serves, as

@@ -350,17 +350,50 @@ a link, never followed)."
         (error "copying ~a to ~a failed: ~a" from to (string-trim '(#\Newline) err))))
     to))
 
+#-win32
+(defun tree-entries (native)
+  "The entries of the directory NATIVE, a native path with no trailing
+slash, as (PATH . KIND), KIND :DIRECTORY, :LINK or :FILE as lstat(2) reads
+it: a link is never followed."
+  (let ((names '()))
+    (let ((directory (sb-posix:opendir native)))
+      (unwind-protect
+           (loop for entry = (sb-posix:readdir directory)
+                 until (sb-alien:null-alien entry)
+                 do (let ((name (sb-posix:dirent-name entry)))
+                      (unless (member name '("." "..") :test #'string=)
+                        (push name names))))
+        (sb-posix:closedir directory)))
+    (loop for name in (nreverse names)
+          for path = (concatenate 'string native "/" name)
+          for type = (logand (sb-posix:stat-mode (sb-posix:lstat path)) sb-posix:s-ifmt)
+          collect (cons path (cond ((= type sb-posix:s-ifdir) :directory)
+                                   ((= type sb-posix:s-iflnk) :link)
+                                   (t :file))))))
+
 (defun remove-tree (directory)
   "DIRECTORY and everything under it, gone — a symbolic link inside is
 removed as a link, never followed into what it points at."
   ;; UIOP's DELETE-DIRECTORY-TREE follows links on SBCL: a home whose cells/
   ;; holds links into the shipped tree would take the shipped cells with it.
-  ;; `rm -rf' on POSIX, rmdir on Windows. Signals when anything is left.
+  ;; On POSIX a walk that lstat(2)s every entry, in this process: an `rm -rf'
+  ;; child cost ~120 ms of a hub install on macOS. `rm -rf' still takes what
+  ;; the walk cannot (a name that is not UTF-8); rmdir on Windows. Signals
+  ;; when anything is left.
   (let ((native (string-right-trim "/\\" (uiop:native-namestring
                                             (uiop:ensure-directory-pathname directory)))))
     (when (uiop:directory-exists-p directory)
-      (run-checked #-win32 (list "rm" "-rf" native)
-                   #+win32 (list "cmd" "/c" "rmdir" "/s" "/q" native)
+      #-win32
+      (labels ((clear (path)
+                 (loop for (child . kind) in (tree-entries path)
+                       do (if (eq kind :directory) (clear child) (sb-posix:unlink child)))
+                 (sb-posix:rmdir path)))
+        (handler-case (clear native)
+          (error ()
+            (run-checked (list "rm" "-rf" native)
+                         (lambda (err) (error "removing ~a failed: ~a" native err))))))
+      #+win32
+      (run-checked (list "cmd" "/c" "rmdir" "/s" "/q" native)
                    (lambda (err) (error "removing ~a failed: ~a" native err))))
     (when (uiop:directory-exists-p directory)
       (error "removing ~a left it in place" native))

@@ -258,6 +258,36 @@ ASK its terminal: (TEXT CODE STREAM PREVIEW), PREVIEW what it printed first."
           (is (search "the hub moved nl-sw-hubbed" (nlk:json-value body :string "error" "message"))))
         (is (not (nlk:installed-cell-p "nodecode-nl-sw-hubbed")))))))
 
+(deftest control-cells-a-pick-at-the-pin-just-read-reads-no-index-again
+    (with-switch-fixture (port base top))
+  ;; The picker read the index a moment ago: turning on its entry at the pin
+  ;; it read takes that read's copy. Another pin reads the hub again, and is
+  ;; refused when the hub pins its own.
+  (let ((reads 0)
+        (commit (make-string 40 :initial-element #\b))
+        (index (hub-index-text (list :name "nl-sw-picked" :git "https://127.0.0.1:9/o/nl-sw-picked.git"
+                                     :commit (make-string 40 :initial-element #\b)
+                                     :path "cells/nl-sw-picked"))))
+    (nle:route "/test-hub/counted.json"
+               (nlk:lambda-ignoring (env)
+                 (incf reads)
+                 (list 200 '(:content-type "application/json") (list index)))
+               :public t)
+    (nlk:with-cleanup ((nle:route "/test-hub/counted.json" nil))
+      (with-saved-globals ((nlk:*hub-index-url* (format nil "http://127.0.0.1:~d/test-hub/counted.json" port))
+                           (nlk:*community-index-url* nil))
+        (nlk:hub-cells :shipped '())
+        (is (= 1 reads) "the picker's read")
+        (with-gateway-http (port :post "/api/gateway/cells" :status 400
+                            :body (format nil "{\"name\": \"nl-sw-picked\", \"on\": true, \"commit\": ~s}" commit))
+          (is (search "git clone failed" (nlk:json-value body :string "error" "message")) "it clones, which fails here"))
+        (is (= 1 reads) "with no second read of the index")
+        (with-gateway-http (port :post "/api/gateway/cells" :status 400
+                            :body (format nil "{\"name\": \"nl-sw-picked\", \"on\": true, \"commit\": ~s}"
+                                          (make-string 40 :initial-element #\c)))
+          (is (search "the hub moved nl-sw-picked" (nlk:json-value body :string "error" "message"))))
+        (is (= 2 reads) "another pin reads the hub again")))))
+
 (deftest control-cells-hub-reads-both-indexes-and-each-answers-for-itself
     (with-switch-fixture (port base top))
   ;; Nodecode's own index and the community's are read side by side: a name

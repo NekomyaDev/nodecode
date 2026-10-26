@@ -253,10 +253,21 @@ OCTETS TRUNCATED-P); past DEADLINE, an internal-real-time, it signals."
         (when (> (get-internal-real-time) deadline)
           (error "fetch exceeded its time limit"))))))
 
+(define-condition http-timeout (sb-sys:deadline-timeout error)
+  ((host :initarg :host :reader http-timeout-host)
+   (limit :initarg :limit :reader http-timeout-limit))
+  (:report (lambda (condition stream)
+             (format stream "~a did not answer within ~a second~:p"
+                     (http-timeout-host condition) (http-timeout-limit condition))))
+  (:documentation "An HTTP exchange past its TIMEOUT: a deadline's timeout
+that is an error too, so a caller's handler for either takes it."))
+
 (defun http (method url &key headers content (timeout 30) (connect-timeout (min 10 timeout))
                               max-bytes binary stream pool proxy)
   "One HTTP exchange that answers every status as a value. => (values BODY
-STATUS HEADERS TRUNCATED-P)."
+STATUS HEADERS TRUNCATED-P). TIMEOUT seconds bound the whole exchange on a
+wall clock -- the connect, the TLS handshake, the headers and, unless
+STREAM, the body; past them it signals HTTP-TIMEOUT."
   ;; METHOD a keyword, HEADERS an alist, CONTENT what dexador sends (a string,
   ;; octets, a multipart alist). BODY is dexador's -- text, or octets with
   ;; BINARY -- or with STREAM the open response stream the caller reads and
@@ -269,31 +280,40 @@ STATUS HEADERS TRUNCATED-P)."
   ;; close: dexador hands a kept-alive connection back to its caller to close
   ;; or pool, and before a refused status it hands it to nobody, so one kept
   ;; alive here would sit in CLOSE-WAIT, a descriptor per exchange, until the
-  ;; process can open no file at all.
-  (handler-case
-      (bind (((body status response-headers _ socket)
-              (dex:request url :method method :headers headers :content content
-                               :connect-timeout connect-timeout :read-timeout timeout
-                               :max-redirects 5 :use-connection-pool pool :keep-alive (and pool t)
-                               :proxy (or proxy dex:*default-proxy*)
-                               :want-stream (or stream (and max-bytes t))
-                               :force-binary (or binary (and max-bytes t)))))
-        (if max-bytes
-            (with-cleanup ((when (streamp body) (ignore-errors (close body :abort t)))
-                           (when (streamp socket) (ignore-errors (close socket :abort t))))
-              (multiple-value-bind (octets truncated)
-                  (read-capped body
-                               (if (functionp max-bytes)
-                                   (funcall max-bytes response-headers)
-                                   max-bytes)
-                               (deadline-after timeout))
-                (values octets status response-headers truncated)))
-            (values body status response-headers nil)))
-    (dex:http-request-failed (condition)
-      (let ((body (dex:response-body condition)))
-        (with-cleanup ((when (streamp body) (ignore-errors (close body :abort t))))
-          (values (if (streamp body) (body-text body 2048) body) (dex:response-status condition)
-                  (dex:response-headers condition) nil))))))
+  ;; process can open no file at all. The wall clock is SBCL's deadline, which
+  ;; every fd wait feels: dexador's :read-timeout is SO_RCVTIMEO, which a TLS
+  ;; stream on SBCL never feels, so without it a peer that stalls mid-handshake
+  ;; or mid-headers held a hub read for minutes.
+  (handler-bind ((sb-sys:deadline-timeout
+                   (lambda (condition)
+                     (unless (typep condition 'http-timeout)
+                       (error 'http-timeout :host (or (ignore-errors (quri:uri-host (quri:uri url))) url)
+                                            :limit timeout)))))
+    (sb-sys:with-deadline (:seconds timeout)
+      (handler-case
+          (bind (((body status response-headers _ socket)
+                  (dex:request url :method method :headers headers :content content
+                                   :connect-timeout connect-timeout :read-timeout timeout
+                                   :max-redirects 5 :use-connection-pool pool :keep-alive (and pool t)
+                                   :proxy (or proxy dex:*default-proxy*)
+                                   :want-stream (or stream (and max-bytes t))
+                                   :force-binary (or binary (and max-bytes t)))))
+            (if max-bytes
+                (with-cleanup ((when (streamp body) (ignore-errors (close body :abort t)))
+                               (when (streamp socket) (ignore-errors (close socket :abort t))))
+                  (multiple-value-bind (octets truncated)
+                      (read-capped body
+                                   (if (functionp max-bytes)
+                                       (funcall max-bytes response-headers)
+                                       max-bytes)
+                                   (deadline-after timeout))
+                    (values octets status response-headers truncated)))
+                (values body status response-headers nil)))
+        (dex:http-request-failed (condition)
+          (let ((body (dex:response-body condition)))
+            (with-cleanup ((when (streamp body) (ignore-errors (close body :abort t))))
+              (values (if (streamp body) (body-text body 2048) body) (dex:response-status condition)
+                      (dex:response-headers condition) nil))))))))
 
 ;;; --- server-sent events -------------------------------------------------------
 

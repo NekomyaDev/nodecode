@@ -165,6 +165,35 @@ LISTEN-HOST took, both closed on the way out."
               (is (eql status (bt2:join-thread client)) (format nil "the ~d answer comes back as a value" status))
               (is (eq :closed (handler-case (sb-sys:with-deadline (:seconds 3) (loop while (read-byte stream nil nil)) :closed) (sb-sys:deadline-timeout () :still-open) (stream-error () :closed))) (format nil "after a ~d the client's connection is closed, not kept" status)))))))))
 
+(deftest dial-http-is-cut-at-its-timeout-however-slowly-its-peer-answers ()
+  ;; A peer that trickles its headers a line at a time never lets one read
+  ;; wait long, so a per-read timeout -- all dexador has, and over TLS not
+  ;; even that -- never fires. TIMEOUT is the whole exchange's wall clock,
+  ;; capped body or not, and what it signals any handler of a deadline or of
+  ;; an error takes.
+  (dolist (cap '(nil 1000))
+    (let ((listener (usocket:socket-listen "127.0.0.1" 0 :reuse-address t :element-type '(unsigned-byte 8))))
+      (nlk:with-cleanup ((usocket:socket-close listener))
+        (let* ((url (format nil "http://127.0.0.1:~d/" (usocket:get-local-port listener)))
+               (start (get-internal-real-time))
+               (client (bt2:make-thread (lambda ()
+                                          (handler-case (progn (nlk:http :get url :timeout 1 :max-bytes cap) :answered)
+                                            (error (condition) condition)))
+                                        :name "http to a trickling peer"))
+               (peer (usocket:socket-accept listener :element-type '(unsigned-byte 8))))
+          (nlk:with-cleanup ((usocket:socket-close peer))
+            (let ((stream (usocket:socket-stream peer)))
+              (ignore-errors
+               (write-sequence (sb-ext:string-to-octets (format nil "HTTP/1.1 200 OK~C~C" #\Return #\Newline)) stream)
+               (loop repeat 20 while (bt2:thread-alive-p client)
+                     do (finish-output stream)
+                        (sleep 0.25)
+                        (write-sequence (sb-ext:string-to-octets (format nil "X-Slow: a~C~C" #\Return #\Newline)) stream)))
+              (let ((outcome (bt2:join-thread client)))
+                (is (typep outcome 'nlk::http-timeout) (format nil "cap ~a: ~a" cap outcome))
+                (is (typep outcome 'sb-sys:deadline-timeout) "a deadline's handler takes it too")
+                (is (< (nlk:elapsed-ms start) 3000) "cut at its one second, not the peer's five")))))))))
+
 (deftest dial-client-contexts-share-one-store-per-verify-mode ()
   ;; Every HTTPS connection dexador opens asks for a context: at the default
   ;; location it is one per verify mode, and a caller's free leaves it whole.

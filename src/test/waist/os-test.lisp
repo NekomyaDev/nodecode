@@ -461,6 +461,19 @@ process's own, or NIL."
   #+win32 (is (not (nlk::path-within-p "C:\\project" "C:\\proj")) "nor there a name that only starts like it"))
 
 #-win32
+#-win32
+(deftest remove-tree-takes-a-link-as-a-link-and-leaves-what-it-points-at
+    (with-temp-workspace (dir "tree/sub/f.txt" "outside/keep.txt"))
+  ;; The walk lstat(2)s every entry: a link to a folder, and one to nothing,
+  ;; go as links; a read-only file goes; what a link points at stays.
+  (let ((tree (merge-pathnames "tree/" dir)))
+    (nlk:make-symlink (merge-pathnames "outside/" dir) (merge-pathnames "sub/out" tree))
+    (nlk:make-symlink (merge-pathnames "nowhere/" dir) (merge-pathnames "dangling" tree))
+    (sb-posix:chmod (uiop:native-namestring (merge-pathnames "sub/f.txt" tree)) #o444)
+    (is (nlk:remove-tree tree))
+    (is (null (uiop:directory-exists-p tree)) "the tree is gone")
+    (is (probe-file (merge-pathnames "outside/keep.txt" dir)) "and what its link reached is not")))
+
 (deftest a-listing-says-what-each-name-is (with-temp-workspace (dir "a.txt" "sub/b.txt"))
   ;; The kind rides the listing, so a walk after folders stats no file.
   (sb-posix:symlink "a.txt" (namestring (merge-pathnames "link" dir)))

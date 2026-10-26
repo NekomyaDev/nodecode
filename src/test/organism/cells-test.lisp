@@ -855,6 +855,30 @@ from GIT at COMMIT; KEYS come first, so they win."
           (is (null (nlk::cell-folders root)) "a refused clone leaves nothing to load")
           (is (probe-file (merge-pathnames "nl-hub-out/nl-hub-out.asd" outside)) "and moves nothing out of place"))))))
 
+(deftest cells-hub-folders-of-one-repository-come-out-of-one-kept-copy ()
+  ;; Folders of one repository at one commit fetch it once: the home keeps a
+  ;; copy, which a picker warms before a pick, and a pick then needs no
+  ;; network -- here, no remote at all.
+  (with-temp-trees ((remote "hub-kept-remote") (home "hub-kept-home"))
+    (let ((root (merge-pathnames "cells/" home)))
+      (multiple-value-bind (git commit)
+          (hub-fixture-repository remote "nl-hub-kept"
+                                  (lambda (folder &aux (cells (merge-pathnames "cells/" folder)))
+                                    (write-peripheral-folder cells "nl-hub-k1")
+                                    (write-peripheral-folder cells "nl-hub-k2")))
+        (flet ((entry (name) (hub-offer name git commit :path (format nil "cells/~a" name))))
+          (nlk:warm-hub-repositories (list (entry "nl-hub-k1") (entry "nl-hub-k2")) root)
+          (nlk:remove-tree (merge-pathnames "nl-hub-kept/" remote))
+          (dolist (name '("nl-hub-k1" "nl-hub-k2"))
+            (is (hub-install (entry name) root) name)
+            (let ((folder (merge-pathnames (format nil "~a/" name) root)))
+              (is (probe-file (merge-pathnames (format nil "~a.asd" name) folder)))
+              (is (null (probe-file (merge-pathnames ".git/" folder))) "the folder alone")
+              (is (equal (list git commit (format nil "cells/~a" name))
+                         (uiop:read-file-lines (merge-pathnames ".hub" folder))))))
+          (is (null (probe-file (merge-pathnames ".cell-staging/" home))) "the staging folder goes")
+          (is (= 2 (length (nlk::cell-folders root))) "both folders, and nothing else, moved in"))))))
+
 #-win32
 (deftest cells-hub-entry-carrying-a-symbolic-link-is-refused ()
   ;; A link in the clone could reach anywhere on the machine the boot loader
