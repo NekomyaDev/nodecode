@@ -1996,7 +1996,9 @@ an entry of one of the hub's two indexes at a pinned commit."
   ;; it serves (SERVES-ENTRIES), which a consumer may offer it by before it is
   ;; installed: the /models picker, its providers. INDEX is which of the
   ;; hub's indexes listed it, "hub" for Nodecode's own and "community" for
-  ;; the one people submit to; NIL for a shipped folder.
+  ;; the one people submit to; NIL for a shipped folder. ARCHIVE and SHA256
+  ;; are the https URL of a .tar.gz of a PATH entry's folder at its commit
+  ;; and that file's sha256, when its index carries them (HUB-ARCHIVE-CHECKOUT).
   (name "" :type string)
   (directory nil)
   (git nil)
@@ -2007,7 +2009,9 @@ an entry of one of the hub's two indexes at a pinned commit."
   (missing '() :type list)
   (description "" :type string)
   (serves '() :type list)
-  (index nil))
+  (index nil)
+  (archive nil)
+  (sha256 nil))
 
 (access (entry offer) (provider offer))
 
@@ -2229,8 +2233,9 @@ runs, as OFFER records by name, each marked as listed by INDEX."
   ;; Refuses an index that is not format 1 and an entry that breaks it, by
   ;; name: a name that could not be a folder, a URL that is not https://, a
   ;; commit that is not a full id — a branch or a short id is a moving target,
-  ;; and the pin is what a review read — and a path that climbs out of its
-  ;; repository or into a dot folder. An index that lies is refused whole,
+  ;; and the pin is what a review read — a path that climbs out of its
+  ;; repository or into a dot folder, and an archive that is not https:// or
+  ;; comes without its sha256. An index that lies is refused whole,
   ;; never read around.
   (let ((index (decode-json source :whole t))
         (shipped-systems (loop for entry in shipped append entry.systems)))
@@ -2242,6 +2247,8 @@ runs, as OFFER records by name, each marked as listed by INDEX."
            for git = (json-value item :text "git")
            for commit = (json-value item :text "commit")
            for path = (json-value item :text "path")
+           for archive = (json-value item :text "archive")
+           for sha256 = (json-value item :text "sha256")
            for platforms = (json-value item :array "platforms")
            for depends-on = (loop for system across (json-array item "depends_on")
                                   when (stringp system) collect (string-downcase system))
@@ -2264,10 +2271,15 @@ runs, as OFFER records by name, each marked as listed by INDEX."
                 (error "hub entry ~a: commit is a full 40-hex id, not ~s" name commit))
               (unless (or (null path) (ppcre:scan "^[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*\\z" path))
                 (error "hub entry ~a: path is a folder inside the repository, a/b, not ~s" name path))
+              (unless (or (and (null archive) (null sha256))
+                          (and archive (uiop:string-prefix-p "https://" archive)
+                               sha256 (ppcre:scan "^[0-9a-f]{64}\\z" sha256)))
+                (error "hub entry ~a: archive is an https:// URL beside its 64-hex sha256" name))
            ;; a name the release ships is the shipped folder's: the hub adds, never replaces
            when (and (or (null platforms) (find +hub-platform+ platforms :test #'equal))
                      (not (find name shipped :key #'offer-name :test #'string=)))
              collect (make-offer :name name :git git :commit commit :path path :index listed-by
+                                 :archive archive :sha256 sha256
                                  :systems (list name)
                                  :depends-on depends-on
                                  :serves serves
@@ -2392,6 +2404,38 @@ directory; signals when git cannot."
                        (format nil "+~a:~a" commit ref)))))
     directory))
 
+;;; A PATH entry's index may name an archive of its folder at its commit, on
+;;; nodecode.ai's /dl beside the index, which Cloudflare keeps at the edge:
+;;; one cell, 8-70 KB, from the nearest edge instead of the repository from
+;;; GitHub. The index pins the archive's sha256 as it pins the commit, so the
+;;; folder unpacked is the pin's as surely as a checkout's.
+
+(defun hub-archive-checkout (entry staging)
+  "Write hub ENTRY's folder, its path at its commit, into STAGING out of the
+archive its index names, when the bytes are the sha256 the index carries:
+=> T, or NIL, with STAGING gone, when there is none or it cannot be had,
+and the caller fetches the repository."
+  (when (and entry.archive entry.sha256)
+    (or (ignore-errors
+         (multiple-value-bind (body status)
+             (http :get entry.archive :binary t :max-bytes (* 16 1024 1024) :timeout 20)
+           (when (and (eql status 200) (typep body '(vector (unsigned-byte 8)))
+                      (string= (sha256-text body) (format nil "sha256:~a" entry.sha256)))
+             (ensure-directories-exist staging)
+             (with-open-file (out (merge-pathnames ".archive.tar.gz" staging) :direction :output
+                                  :element-type '(unsigned-byte 8) :if-exists :supersede)
+               (write-sequence body out))
+             ;; a name relative to the working directory: Git for Windows' tar
+             ;; reads the colon of a drive as a host to fetch the archive from
+             (multiple-value-bind (out err status)
+                 (run-bounded (list "tar" "-xzf" ".archive.tar.gz") :seconds 60 :directory staging)
+               (declare (ignore out))
+               (unless (eql status 0)
+                 (error "~a: tar failed: ~a" entry.name err)))
+             (delete-file (merge-pathnames ".archive.tar.gz" staging))
+             t)))
+        (progn (when (probe-file staging) (remove-tree staging)) nil))))
+
 (defun hub-repository-checkout (entry staging home)
   "Write hub ENTRY's folder, its path at its commit, into STAGING out of the
 copy HOME keeps of its repository (HUB-REPOSITORY): => T, or NIL when that
@@ -2413,7 +2457,8 @@ copy cannot give it, and the caller clones."
   "Clone the hub ENTRY at its commit and move it to TARGET, marked the
 installer's. => TARGET."
   ;; The clone is proven before it moves: HEAD is the pinned commit (a folder
-  ;; checked out of the kept copy is the pin's by its objects' hashes), the
+  ;; checked out of the kept copy is the pin's by its objects' hashes, one
+  ;; unpacked from its index's archive by the archive's sha256), the
   ;; primary system is the entry's name and, for an entry an index listed,
   ;; its description, depends_on and serves are the index's, no symbolic link reaches
   ;; out of it, and every system it declares it needs is here. It is made in
@@ -2442,10 +2487,12 @@ installer's. => TARGET."
       (with-cleanup ((ignore-errors (when (probe-file staging) (remove-tree staging)))
                      (ignore-errors (uiop:delete-empty-directory
                                      (uiop:pathname-parent-directory-pathname staging))))
-        ;; A folder of a repository checks out of the copy this home keeps of
-        ;; it (HUB-REPOSITORY-CHECKOUT); a whole repository, which keeps its
-        ;; .git, and a folder that copy cannot give, clone.
-        (unless (and entry.path (hub-repository-checkout entry staging home))
+        ;; A folder of a repository unpacks out of the archive its index names
+        ;; (HUB-ARCHIVE-CHECKOUT), else checks out of the copy this home keeps
+        ;; of it (HUB-REPOSITORY-CHECKOUT); a whole repository, which keeps its
+        ;; .git, and a folder neither can give, clone.
+        (unless (and entry.path (or (hub-archive-checkout entry staging)
+                                    (hub-repository-checkout entry staging home)))
           (when (probe-file staging) (remove-tree staging))
           (git "clone" "--quiet" "--no-checkout" "--" entry.git native)
           (git "checkout" "--quiet" "--detach" entry.commit)
