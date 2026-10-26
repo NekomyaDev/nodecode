@@ -275,7 +275,7 @@ renderer, the program loop.")
    ;; the shipped catalog, the hub's, and installing from them (cells.lisp)
    #:shipped-cells-directory #:shipped-cells #:find-offer #:offer-closure
    #:cell-dependents #:system-cell #:hub-pin
-   #:hub-cells #:read-hub-index #:*hub-index-url* #:*community-index-url* #:warm-hub-repositories
+   #:hub-cells #:read-hub-index #:*hub-index-url* #:*community-index-url*
    #:missing-shipped-cells #:install-cell #:uninstall-cell
    #:installed-cell-p #:load-cell #:definitions-before #:report-unkept-changes #:folder-name
    ;; what a peripheral is made of, and what it runs on (cells.lisp)

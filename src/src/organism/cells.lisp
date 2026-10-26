@@ -2354,12 +2354,12 @@ them. NIL on Windows, where a clone makes none."
 ;;; commit. A clone per install fetched all of it again for each: 0.7 s on a
 ;;; near network, 5-25 s on a far one. A home keeps one bare copy per
 ;;; repository instead, holding each commit it was asked for one commit deep;
-;;; a folder checks out of it with no network, and a picker fetches the
-;;; commits its offers need as it opens (WARM-HUB-REPOSITORIES).
+;;; the first pick at a commit fetches it, and every folder after checks
+;;; out of it with no network.
 
 (defvar *hub-repository-lock* (bt2:make-lock :name "hub repositories")
-  "Held while a copy of a hub repository fetches, so a pick and a picker's
-warm-up fetch one commit once.")
+  "Held while a copy of a hub repository fetches, so two picks at once
+fetch one commit once.")
 
 (defun hub-git (arguments &optional environment)
   "Git run with ARGUMENTS, never prompting and never collecting on its own,
@@ -2408,20 +2408,6 @@ copy cannot give it, and the caller clones."
               (list (format nil "GIT_INDEX_FILE=~a"
                             (uiop:native-namestring (merge-pathnames ".git-index" staging)))))
      t)))
-
-(defun warm-hub-repositories (offers &optional (root *cells-directory*))
-  "Fetch into the copies ROOT's home keeps (HUB-REPOSITORY) the commit of
-each folder of a repository among OFFERS that ROOT has not installed, so
-picking one checks it out with no network."
-  (when root
-    (let ((home (uiop:pathname-parent-directory-pathname root)) (fetched '()))
-      (dolist (entry offers)
-        (let ((key (cons (offer-git entry) (offer-commit entry))))
-          (when (and (offer-git entry) (offer-path entry)
-                     (not (member key fetched :test #'equal))
-                     (not (installed-cell-p (offer-name entry) root)))
-            (push key fetched)
-            (ignore-errors (hub-repository entry home))))))))
 
 (defun clone-install (entry target)
   "Clone the hub ENTRY at its commit and move it to TARGET, marked the

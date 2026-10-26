@@ -572,13 +572,11 @@ the asking thread.")
 (defun read-provider-offers (&aux (shipped (nlk:shipped-cells)))
   "The release's folders and Nodecode's own index's entries (NLK:HUB-CELLS,
 its kept copy when the network fails it) into *PROVIDER-OFFERS*; the
-release's alone when no index can be read. The commits the providers'
-folders sit at start fetching off this thread (NLK:WARM-HUB-REPOSITORIES),
-so a pick finds its folder at hand."
-  (let ((offers (append shipped (ignore-errors (nlk:hub-cells :shipped shipped :community nil)))))
-    (spawn "hub-warm-up"
-      (ignore-errors (nlk:warm-hub-repositories (remove-if-not #'nlk:offer-serves offers))))
-    (setf *provider-offers* (cons (get-universal-time) offers))))
+release's alone when no index can be read. It fetches no folder: a pick
+does, so a launch that never picks downloads no cell."
+  (setf *provider-offers*
+        (cons (get-universal-time)
+              (append shipped (ignore-errors (nlk:hub-cells :shipped shipped :community nil))))))
 
 (defun hub-offers-for (name commit shipped)
   "The hub's entries to turn NAME on from: the copy of Nodecode's own index

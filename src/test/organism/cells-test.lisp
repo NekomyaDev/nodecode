@@ -856,9 +856,9 @@ from GIT at COMMIT; KEYS come first, so they win."
           (is (probe-file (merge-pathnames "nl-hub-out/nl-hub-out.asd" outside)) "and moves nothing out of place"))))))
 
 (deftest cells-hub-folders-of-one-repository-come-out-of-one-kept-copy ()
-  ;; Folders of one repository at one commit fetch it once: the home keeps a
-  ;; copy, which a picker warms before a pick, and a pick then needs no
-  ;; network -- here, no remote at all.
+  ;; Folders of one repository at one commit fetch it once: the first pick
+  ;; fills the copy the home keeps, and the next needs no network -- here,
+  ;; no remote at all.
   (with-temp-trees ((remote "hub-kept-remote") (home "hub-kept-home"))
     (let ((root (merge-pathnames "cells/" home)))
       (multiple-value-bind (git commit)
@@ -867,10 +867,10 @@ from GIT at COMMIT; KEYS come first, so they win."
                                     (write-peripheral-folder cells "nl-hub-k1")
                                     (write-peripheral-folder cells "nl-hub-k2")))
         (flet ((entry (name) (hub-offer name git commit :path (format nil "cells/~a" name))))
-          (nlk:warm-hub-repositories (list (entry "nl-hub-k1") (entry "nl-hub-k2")) root)
+          (is (hub-install (entry "nl-hub-k1") root) "the first pick fetches")
           (nlk:remove-tree (merge-pathnames "nl-hub-kept/" remote))
+          (is (hub-install (entry "nl-hub-k2") root) "the next one has no remote to fetch from")
           (dolist (name '("nl-hub-k1" "nl-hub-k2"))
-            (is (hub-install (entry name) root) name)
             (let ((folder (merge-pathnames (format nil "~a/" name) root)))
               (is (probe-file (merge-pathnames (format nil "~a.asd" name) folder)))
               (is (null (probe-file (merge-pathnames ".git/" folder))) "the folder alone")

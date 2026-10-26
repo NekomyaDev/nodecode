@@ -288,6 +288,30 @@ ASK its terminal: (TEXT CODE STREAM PREVIEW), PREVIEW what it printed first."
           (is (search "the hub moved nl-sw-picked" (nlk:json-value body :string "error" "message"))))
         (is (= 2 reads) "another pin reads the hub again")))))
 
+(deftest control-cells-reading-the-offers-fetches-no-folder
+    (with-switch-fixture (port base top))
+  ;; The offers are read at every launch, for /models: that read downloads
+  ;; no cell, and the first pick of one fetches it. A fetch would make the
+  ;; home's copy before its git failed against the dead port.
+  (with-temp-trees ((home "offers-home"))
+    (nle:route "/test-hub/offered.json"
+               (constantly
+                (list 200 '(:content-type "application/json")
+                      (list (format nil "{\"format\": 1, \"cells\": [{\"name\": \"nl-sw-offered\", \"git\": \"https://127.0.0.1:9/o/cells.git\", \"commit\": ~s, \"path\": \"cells/nl-sw-offered\", \"description\": \"d\", \"serves\": [{\"provider\": \"nl-sw-offered\", \"sign_in\": \"key\"}]}]}"
+                                    (make-string 40 :initial-element #\d)))))
+               :public t)
+    (nlk:with-cleanup ((nle:route "/test-hub/offered.json" nil))
+      (with-saved-globals ((nlk:*hub-index-url* (format nil "http://127.0.0.1:~d/test-hub/offered.json" port))
+                           (nlk:*community-index-url* nil)
+                           (nlk::*cells-directory* (merge-pathnames "cells/" home))
+                           nle::*provider-offers*)
+        (ensure-directories-exist (merge-pathnames "cells/" home))
+        (is (find "nl-sw-offered" (cdr (nle::read-provider-offers)) :key #'nlk:offer-name :test #'string=) "the hub's entry is offered")
+        (dolist (thread (bt2:all-threads))
+          (when (search "hub-warm-up" (bt2:thread-name thread))
+            (bt2:join-thread thread)))
+        (is (null (probe-file (merge-pathnames "hub/" home))) "and nothing was fetched")))))
+
 (deftest control-cells-hub-reads-both-indexes-and-each-answers-for-itself
     (with-switch-fixture (port base top))
   ;; Nodecode's own index and the community's are read side by side: a name
