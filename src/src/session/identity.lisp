@@ -45,6 +45,11 @@
    (anchor-turn-id :text "anchor-turn-id")
    (anchor-log-position :integer "anchor-log-position")))
 
+(define-event session-moved +kind-session-moved+
+  "A session's folder from here on, and the one it had: MOVE-SESSIONS writes it."
+  ((cwd :string "cwd" :default "")
+   (from :string "from" :default "")))
+
 (defun session-exists-p (session-id)
   "True when SESSION-ID is a session this image answers for: the open store
 has its SESSION.CREATED fact, or it was minted and is still standing by."
@@ -194,17 +199,61 @@ lands (standby.lisp, MATERIALIZE-STANDBY-SESSION)."
 
 (defun find-session (session-id)
   "Return the durable session for SESSION-ID, or NIL."
+  ;; Its folder is the newest SESSION.MOVED's, else the created fact's: a
+  ;; session follows its folder when that moves (MOVE-SESSIONS).
   (check-type session-id session-id)
   (when-let (event (and (store-open-p)
                         (events :session-id session-id :kind +kind-session-created+
                                 :as :instance)))
-    (%make-durable-session
-     :id event.session-id
-     :cwd (session-created-cwd event)
-     :parent (session-created-parent event)
-     :created-at event.occurred-at
-     :anchor-turn-id (session-created-anchor-turn-id event)
-     :anchor-log-position (session-created-anchor-log-position event))))
+    (let ((moved (events :session-id session-id :kind +kind-session-moved+
+                         :order :newest :limit 1 :as :instance)))
+      (%make-durable-session
+       :id event.session-id
+       :cwd (if moved (session-moved-cwd moved) (session-created-cwd event))
+       :parent (session-created-parent event)
+       :created-at event.occurred-at
+       :anchor-turn-id (session-created-anchor-turn-id event)
+       :anchor-log-position (session-created-anchor-log-position event)))))
+
+(defun move-sessions (from to &key sessions)
+  "Move every session whose folder is FROM, or a folder inside it, to the same
+place under TO, one SESSION.MOVED each => ((SESSION-ID OLD NEW) ...) in the
+order the sessions were created. SESSIONS, a list of ids, moves only those."
+  ;; A session's folder is a fact of its log, so a folder renamed or archived
+  ;; on disk strands every session recorded there -- each sh call fails on
+  ;; the spawn and every relative path misses -- and a room meant to work in
+  ;; another checkout keeps its old one. This is the move, for both. TO, and
+  ;; every folder under it a session lands in, must be there, or nothing is
+  ;; written; FROM need not be (the usual call follows a rename). A child
+  ;; created after the move inherits the folder its parent has now.
+  (let ((from (string-right-trim "/" (resolve-session-cwd from)))
+        (to (string-right-trim "/" (check-session-cwd to))))
+    (flet ((place (cwd &aux (folder (string-right-trim "/" cwd)))
+             ;; FOLDER's place under TO when it is FROM or inside it, refused
+             ;; when no folder is there
+             (when (or (string= folder from)
+                       (uiop:string-prefix-p (concatenate 'string from "/") folder))
+               (let ((place (concatenate 'string to (subseq folder (length from)))))
+                 (check-session-cwd (if (string= place "") "/" place))))))
+      (if (string= from to)
+          '()
+          (with-store-transaction (handle)
+            (let ((moves (loop for (id cwd) in (sql-rows handle (format nil "select d.session_id, d.cwd
+                                                                    from session_directory d
+                                                                    join events e on e.session_id = d.session_id
+                                                                     and e.kind = '~a'
+                                                                   order by e.log_position"
+                                                                  +kind-session-created+))
+                               for place = (and (or (null sessions)
+                                                    (member id sessions :test #'string=))
+                                                (place cwd))
+                               when place
+                                 collect (list id cwd place))))
+              (with-event-owner 'move-sessions
+                (loop for (id cwd place) in moves
+                      do (append-event-row handle id +kind-session-moved+
+                                           (list :cwd place :from cwd))))
+              moves))))))
 
 (defun session-fork-edge (session-id)
   "SESSION-ID's edge to the session it forks => (PARENT ANCHOR-TURN-ID

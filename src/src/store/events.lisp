@@ -57,6 +57,9 @@
      ,@(when evidence `((pushnew ,name *replay-suppressed-kinds* :test #'string=)))))
 
 (define-kind +kind-session-created+ "session.created" :owner create-session)
+;; A session's folder from then on: MOVE-SESSIONS writes one per session it
+;; moves, and FIND-SESSION and the session directory read the newest.
+(define-kind +kind-session-moved+ "session.moved" :owner move-sessions :evidence t)
 (define-kind +kind-turn-started+ "turn.started" :owner admit-turn)
 (define-kind +kind-input-committed+ "turn.input_committed" :owner admit-turn)
 (define-kind +kind-assistant-completed+ "turn.assistant_message_completed" :owner complete-turn)
@@ -577,6 +580,10 @@ newest turn and where it stands, in the directory's TURN_ID and TURN_KIND.")
                anchor_turn_id = json_extract(new.payload, '$.anchor-turn-id')
          where session_id = new.session_id
            and new.kind = '~a' and new.aggregate_type = 'session';
+        update session_directory
+           set cwd = coalesce(json_extract(new.payload, '$.cwd'), '')
+         where session_id = new.session_id
+           and new.kind = '~a' and new.aggregate_type = 'session';
         update session_directory set title = ~a
          where session_id = new.session_id and new.kind = '~a';
         update session_directory
@@ -595,7 +602,7 @@ newest turn and where it stands, in the directory's TURN_ID and TURN_KIND.")
         update session_directory set prompt = null
          where session_id = new.session_id and ~a;
       end"
-           +kind-session-created+
+           +kind-session-created+ +kind-session-moved+
            (directory-text-sql "new.payload" "$.title") +kind-session-title+
            (directory-prompt-sql "new.payload") +kind-input-committed+
            +kind-assistant-completed+
@@ -608,7 +615,11 @@ newest turn and where it stands, in the directory's TURN_ID and TURN_KIND.")
    (format nil "insert or ignore into session_directory
         (session_id, created_at, cwd, parent, anchor_turn_id, title, prompt,
          updated_at, message_count, source, turn_id, turn_kind, waits, waits_turn)
-      select session_id, occurred_at, coalesce(json_extract(payload, '$.cwd'), ''),
+      select session_id, occurred_at,
+             coalesce((select json_extract(v.payload, '$.cwd') from events v
+                        where v.session_id = events.session_id and v.kind = '~a'
+                        order by v.log_position desc limit 1),
+                      json_extract(payload, '$.cwd'), ''),
              json_extract(payload, '$.parent'), json_extract(payload, '$.anchor-turn-id'),
              (select ~a from events t
                where t.session_id = events.session_id and t.kind = '~a'
@@ -643,6 +654,7 @@ newest turn and where it stands, in the directory's TURN_ID and TURN_KIND.")
         from events
        where kind = '~a' and aggregate_type = 'session'
          and not exists (select 1 from session_directory)"
+           +kind-session-moved+
            (directory-text-sql "t.payload" "$.title") +kind-session-title+
            (directory-prompt-sql "i.payload") +kind-input-committed+
            (directory-prompt-sql "i.payload") (directory-retract-to-root-sql "r")

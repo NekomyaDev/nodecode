@@ -1704,10 +1704,22 @@ yield-and-background lifecycle."
                 (exec-stop-process process :message "interrupted by user"
                                            :by (if operator-p :operator :turn) :reason reason))))))))
 
-(defun ambient-session-directory (&optional (turn *current-durable-turn*))
-  "TURN's session cwd, the evaluating turn's by default; NIL outside a turn or an open store."
-  (let ((session (and turn (nlk:find-session (nlk:durable-turn-session-id turn)))))
-    (and session (nlk:durable-session-cwd session))))
+(defun ambient-session-directory (&key (turn *current-durable-turn*) present)
+  "TURN's session cwd, the evaluating turn's by default; NIL outside a turn or an open store.
+PRESENT refuses a folder that is not there any more, naming the move that
+brings its sessions to where it went."
+  ;; A folder renamed on disk strands every session recorded in it, and the
+  ;; spawn's ENOENT named setsid, never the folder.
+  (let* ((session (and turn (nlk:find-session (nlk:durable-turn-session-id turn))))
+         (cwd (and session (nlk:durable-session-cwd session))))
+    (when (and cwd present)
+      (handler-case (nlk:check-session-cwd cwd)
+        (nlk:missing-session-folder (condition)
+          (error "this session's folder cannot be worked in: ~a. If it moved, ~
+                  (nlk:move-sessions ~s \"NEW-FOLDER\") moves every session recorded ~
+                  there; :directory runs one command elsewhere."
+                 condition (string-right-trim "/" cwd)))))
+    cwd))
 
 ;;; --- child liveness: /proc, the stall verdict -------------------------------
 ;;; The eval snippet's children are OS processes the harness supervises, not
@@ -1858,7 +1870,8 @@ value."
   ;; Stdin is empty, so a program that reads it sees end of file rather than
   ;; waiting on a terminal nobody holds; a heredoc in the command string is
   ;; the shell's own way to feed it. The child runs in DIRECTORY, else the
-  ;; session's cwd, else this image's. A failing command never signals: its
+  ;; session's cwd -- refused, naming NLK:MOVE-SESSIONS, when that folder is
+  ;; gone -- else this image's. A failing command never signals: its
   ;; output is the answer and its status the verdict. A long command rides the
   ;; eval snippet's lifecycle like any form — backgrounded at the yield window,
   ;; and killed when the evaluation unwinds (eval-interrupt), so a stuck child
@@ -1900,7 +1913,7 @@ value."
             (spawn-program (session-argv (if (stringp command)
                                              (shell-argv command)
                                              command))
-                           :directory (or directory (ambient-session-directory))
+                           :directory (or directory (ambient-session-directory :present t))
                            :error-output :output)))
       (when snippet (setf (exec-process-child-pid snippet) pid
                           (exec-process-stalled-ticks snippet) 0))

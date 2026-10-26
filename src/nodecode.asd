@@ -444,6 +444,7 @@ of stacking."
      (:file "wire/protocol-test")
      (:file "wire/invocation-test")
      (:file "session/identity-test")
+     (:file "session/move-test")
      ;; standby-test follows identity-test: it drives the same session
      ;; fixtures, and asserts what a minted-but-unspoken id did NOT write.
      (:file "session/standby-test")

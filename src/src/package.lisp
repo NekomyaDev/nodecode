@@ -217,6 +217,8 @@ renderer, the program loop.")
    #:create-session #:find-session #:session-exists-p
    ;; The folder an operator names for a new session, there to work in.
    #:check-session-cwd
+   ;; A session follows its folder when that moves: SESSION.MOVED is the fact.
+   #:move-sessions
    ;; A session minted before its first block is standing by (standby.lisp):
    ;; the id lives in memory and the log stays quiet until a block lands.
    #:standby-session #:on-standby-p #:standby-session-record
