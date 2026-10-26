@@ -3326,10 +3326,13 @@ models -- so a shell never builds the list itself.")
           ;; Each provider a folder not installed there serves, which picking
           ;; installs (PROVIDER-OFFERS' plists).
           :offers (loop for offer across (or (gethash "offers" body) #())
-                        collect (list :cell (gethash "cell" offer) :commit (gethash "commit" offer)
-                                      :provider (gethash "provider" offer) :name (gethash "name" offer)
-                                      :sign-in (or (gethash "sign_in" offer) "key")
-                                      :description (gethash "description" offer)))
+                        collect (append
+                                 (list :cell (gethash "cell" offer) :commit (gethash "commit" offer)
+                                       :provider (gethash "provider" offer) :name (gethash "name" offer)
+                                       :sign-in (or (gethash "sign_in" offer) "key")
+                                       :description (gethash "description" offer))
+                                 ;; in already, its provider not answering yet
+                                 (and (eq t (gethash "installed" offer)) (list :installed t))))
           ;; A gateway older than the providers field sends none: what it
           ;; has keys for is unknown here, not none.
           :unreported (not (nth-value 1 (gethash "providers" body))))))

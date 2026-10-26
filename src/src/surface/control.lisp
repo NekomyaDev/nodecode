@@ -583,7 +583,9 @@ release's alone when no index can be read."
 (:CELL NAME :COMMIT PIN :PROVIDER ID :NAME LABEL :SIGN-IN HOW :DESCRIPTION
 TEXT) plists in the folders' order; HOW is the folder's word, `key' or the
 command line that signs in. A folder this image cannot install (OFFER-MISSING)
-is not offered."
+is not offered. One installed whose provider does not answer yet (a sign-in
+left unfinished) is offered still, its plist ending :INSTALLED T, so the list
+keeps it and picking it goes straight to the sign-in."
   ;; The first ask reads; a later one past +PROVIDER-OFFERS-SECONDS+ answers
   ;; what it has and rereads off its thread, so /models never waits on the hub.
   (cond ((null memo) (setf memo (read-provider-offers)))
@@ -594,17 +596,29 @@ is not offered."
          (spawn "provider-offers"
            (unwind-protect (ignore-errors (read-provider-offers))
              (setf *provider-offers-refresh* nil)))))
-  (loop for entry in (cdr memo)
+  (loop with connected = nil and read = nil
+        for entry in (cdr memo)
         for name = (nlk:offer-name entry)
-        unless (or (nlk:offer-missing entry) (nlk:find-cell name) (nlk:installed-cell-p name))
+        for installed = (and (or (nlk:find-cell name) (nlk:installed-cell-p name)) t)
+        unless (nlk:offer-missing entry)
           append (loop for serves in (nlk:offer-serves entry)
                        for provider = (cdr (assoc "provider" serves :test #'string=))
-                       when (and (stringp provider) (plusp (length provider)))
-                         collect (list :cell name :commit (nlk:offer-commit entry)
-                                       :provider provider
-                                       :name (or (cdr (assoc "name" serves :test #'string=)) provider)
-                                       :sign-in (or (cdr (assoc "sign_in" serves :test #'string=)) "key")
-                                       :description (nlk:offer-description entry)))))
+                       when (and (stringp provider) (plusp (length provider))
+                                 ;; an installed folder's provider that answers
+                                 ;; is listed as any connected one is
+                                 (not (and installed
+                                           (member provider
+                                                   (if read connected
+                                                       (setf read t
+                                                             connected (ignore-errors (connected-provider-ids))))
+                                                   :test #'string-equal))))
+                         collect (append
+                                  (list :cell name :commit (nlk:offer-commit entry)
+                                        :provider provider
+                                        :name (or (cdr (assoc "name" serves :test #'string=)) provider)
+                                        :sign-in (or (cdr (assoc "sign_in" serves :test #'string=)) "key")
+                                        :description (nlk:offer-description entry))
+                                  (and installed (list :installed t))))))
 
 ;;; --- the index: what the organism keeps --------------------------------------------
 ;;; The page's Index tab reads and writes the definitions the organism keeps,

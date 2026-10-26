@@ -10064,6 +10064,9 @@ slots the panel already reads."
   (dolist (slot '(searchable context subtitle hint empty-label no-match-label
                   input-label input-secret-p))
     (setf (slot-value dialog slot) (getf spec (intern (string slot) :keyword))))
+  ;; The sign-in step has no summary: its header is the title row and a
+  ;; blank, so the clock sits one blank under the title, not three.
+  (setf dialog.header-rows (and (eq step :signing-in) 2))
   (when-let (walk (connect-dialog-walk dialog))
     (setf dialog.context walk
           dialog.hint (or (getf spec :walk-hint) dialog.hint)))
@@ -10147,48 +10150,53 @@ refused install says why over the list, and nothing else moved."
   (connect-clear-credential dialog)
   (setf (connect-dialog-provider-id dialog) id
         (connect-dialog-provider-label dialog) (picker-row-label row))
-  (connect-enter-step dialog :installing)
-  (setf dialog.subtitle (format nil dialog.subtitle (getf offer :cell)
-                                (let ((pin (getf offer :commit)))
-                                  (and (stringp pin) (subseq pin 0 (min 7 (length pin)))))))
-  (off-loop model
-            (lambda () (install-offered-cell model offer))
-            (lambda (model answer)
-              ;; Esc, or another dialog, moved the wizard on: the answer moves nothing
-              (if (not (and (eq dialog (chat-model-dialog model))
-                            (eq :installing (connect-dialog-step dialog))))
-                  :quiet
-                  (let ((refused (or (off-loop-failure answer) (getf answer :refused)))
-                        (how (getf offer :sign-in)))
-                    (cond
-                      (refused
-                       (connect-clear-credential dialog)
-                       (connect-enter-step dialog :provider)
-                       (show-status model (format nil "~a was not installed: ~a" (getf offer :cell) refused)
-                                    :error-p t))
-                      (t
-                       (when-let (commands (getf answer :commands))
-                         (set-gateway-commands commands))
-                       (setf dialog.rows (funcall (connect-dialog-provider-rows dialog)))
-                       (cond
-                         ;; the folder signs in with a command of its own:
-                         ;; it runs, and the wizard waits on its words
-                         ((and (not key) (uiop:string-prefix-p "/" how))
-                          (connect-sign-in model dialog how))
-                         ;; it answers already -- a key it had, or a login
-                         ;; its folder brings, which the reread rows say: a
-                         ;; pick, as Enter on a connected provider is
-                         ((and (not key)
-                               (or (getf value :connected)
-                                   (find-if (lambda (row &aux (now (picker-row-value row)))
-                                              (and (equal id (getf now :provider))
-                                                   (getf now :connected)))
-                                            dialog.rows)))
-                          (let ((on-success (connect-dialog-on-success dialog)))
-                            (dismiss-dialog model (and on-success
-                                                       (lambda (model) (funcall on-success model id))))))
-                         (t (connect-ask-key dialog row)))))
-                    (render-state model)))))
+  (flet ((go-on (model commands &aux (how (getf offer :sign-in)))
+           ;; the folder is in: on as the provider asks
+           (when commands (set-gateway-commands commands))
+           (setf dialog.rows (funcall (connect-dialog-provider-rows dialog)))
+           (cond
+             ;; the folder signs in with a command of its own:
+             ;; it runs, and the wizard waits on its words
+             ((and (not key) (uiop:string-prefix-p "/" how))
+              (connect-sign-in model dialog how))
+             ;; it answers already -- a key it had, or a login
+             ;; its folder brings, which the reread rows say: a
+             ;; pick, as Enter on a connected provider is
+             ((and (not key)
+                   (or (getf value :connected)
+                       (find-if (lambda (row &aux (now (picker-row-value row)))
+                                  (and (equal id (getf now :provider))
+                                       (getf now :connected)))
+                                dialog.rows)))
+              (let ((on-success (connect-dialog-on-success dialog)))
+                (dismiss-dialog model (and on-success
+                                           (lambda (model) (funcall on-success model id))))))
+             (t (connect-ask-key dialog row)))))
+    (if (getf offer :installed)
+        ;; in already, its provider not answering yet -- a sign-in Esc left
+        ;; unfinished: nothing to install, on to it
+        (go-on model nil)
+        (progn
+          (connect-enter-step dialog :installing)
+          (setf dialog.subtitle (format nil dialog.subtitle (getf offer :cell)
+                                        (let ((pin (getf offer :commit)))
+                                          (and (stringp pin) (subseq pin 0 (min 7 (length pin)))))))
+          (off-loop model
+                    (lambda () (install-offered-cell model offer))
+                    (lambda (model answer)
+                      ;; Esc, or another dialog, moved the wizard on: the answer moves nothing
+                      (if (not (and (eq dialog (chat-model-dialog model))
+                                    (eq :installing (connect-dialog-step dialog))))
+                          :quiet
+                          (let ((refused (or (off-loop-failure answer) (getf answer :refused))))
+                            (if refused
+                                (progn
+                                  (connect-clear-credential dialog)
+                                  (connect-enter-step dialog :provider)
+                                  (show-status model (format nil "~a was not installed: ~a" (getf offer :cell) refused)
+                                               :error-p t))
+                                (go-on model (getf answer :commands)))
+                            (render-state model))))))))
   t)
 
 (defun sign-in-facts (text &aux (text (or text "")))
@@ -10203,8 +10211,14 @@ operator to, and the device code it asks for there when it names one: =>
                                      (member (char text i) '(#\Space #\Tab #\Newline #\Return)))
                      if (and blank start) collect (subseq text start i) and do (setf start nil)
                      else if (and (not blank) (null start)) do (setf start i))))
-    (values (let ((url (find-if (lambda (word) (or (uiop:string-prefix-p "https://" word)
-                                                   (uiop:string-prefix-p "http://" word)))
+    (values (let ((url (find-if (lambda (word &aux (host (search "://" word)))
+                                  ;; a loopback address is where the browser
+                                  ;; comes back to, never where to sign in
+                                  (and host (< host 6)
+                                       (member (subseq word 0 host) '("http" "https") :test #'string-equal)
+                                       (notany (lambda (loopback)
+                                                 (uiop:string-prefix-p loopback (subseq word (+ host 3))))
+                                               '("localhost" "127." "[::1]"))))
                                 words)))
               (and url (string-right-trim ".,;)" url)))
             (loop for (word next) on words
@@ -10253,15 +10267,22 @@ folder's sign-in still waiting without it."
     (setf dialog.subtitle (format nil dialog.subtitle (connect-provider-name dialog)))
     (off-loop model
               (lambda () (json-value (gateway-slash-answer model how) :string "text"))
-              (lambda (model text &aux (failure (off-loop-failure text)))
+              (lambda (model text &aux (failure (off-loop-failure text))
+                                       (url (and (not failure) (sign-in-facts text))))
                 (cond ((not (ours model)) :quiet)
-                      (t (setf (connect-dialog-result-message dialog)
-                               (if failure (format nil "~a: ~a" how failure) (or text "")))
+                      ;; no page to sign in at: the command said why not --
+                      ;; over the list, as a refused install says it
+                      ((null url)
+                       (setf (connect-dialog-result-message dialog) "")
+                       (connect-clear-credential dialog)
+                       (connect-enter-step dialog :provider)
+                       (show-status model (if failure (format nil "~a: ~a" how failure) (or text how))
+                                    :error-p t)
+                       (render-state model))
+                      (t (setf (connect-dialog-result-message dialog) text)
                          ;; the page opens where there is a browser to open it
-                         (when-let (url (and (not failure) (sign-in-facts text)))
-                           (ignore-errors (open-target url)))
-                         ;; a refused command has nothing to wait for
-                         (unless failure (wait model))
+                         (ignore-errors (open-target url))
+                         (wait model)
                          (render-state model)))))))
 
 (defun connect-back (model dialog)

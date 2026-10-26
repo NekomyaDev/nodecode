@@ -50,8 +50,9 @@
 
 (deftest provider-offers-name-the-providers-of-folders-this-home-lacks ()
   ;; Each provider an offered folder serves, with the pin a picker installs it
-  ;; at; a folder this image could not install, or one already in, is not
-  ;; offered.
+  ;; at; a folder this image could not install is not offered, and one already
+  ;; in is offered only for a provider that does not answer yet (a sign-in Esc
+  ;; left unfinished), marked :INSTALLED, so the list keeps it.
   (let* ((commit (make-string 40 :initial-element #\b))
          (serves (nlk::serves-entries (list '(:provider "nl-go" :name "NL Go")
                                             '(:provider "nl-codex" :name "NL Codex" :sign-in "/nl-codex login"))))
@@ -66,9 +67,12 @@
                      (list :cell "nl-cell-go" :commit commit :provider "nl-codex" :name "NL Codex"
                            :sign-in "/nl-codex login" :description "Go"))
                (nle::provider-offers)))
-    (with-stubbed-fdefinition (nlk:installed-cell-p (name &optional root)
-                                (and (equal name "nl-cell-go") (or root t)))
-      (is (null (nle::provider-offers)) "an installed folder is not offered"))))
+    (with-stubbed-fdefinitions ((nlk:installed-cell-p (name &optional root)
+                                  (and (equal name "nl-cell-go") (or root t)))
+                                (nle::connected-provider-ids () '("nl-go")))
+      (is (equal (list (list :cell "nl-cell-go" :commit commit :provider "nl-codex" :name "NL Codex"
+                             :sign-in "/nl-codex login" :description "Go" :installed t))
+                 (nle::provider-offers)) "an installed folder is offered only for the provider not answering yet"))))
 
 (defun go-offer (&key (sign-in "key") (provider "nl-go") (cell "nl-cell-go"))
   "A PROVIDER-OFFERS plist for CELL serving PROVIDER, signed in to by SIGN-IN."
@@ -180,6 +184,37 @@
           (is (rows-carry-p "nl-cell-gone was not installed: the hub has no nl-cell-gone"
                             (nle::compose-frame model))))))))
 
+(deftest connect-a-folder-already-in-goes-straight-to-its-sign-in ()
+  ;; Esc out of a sign-in leaves the folder installed and its provider not
+  ;; answering: the list still offers it (:INSTALLED), and Enter goes on to
+  ;; its sign-in with nothing installed again.
+  (let ((installs 0))
+    (with-stubbed-fdefinition (nle::install-offered-cell (model offer)
+                                model offer
+                                (incf installs)
+                                (list :commands '()))
+      (with-frame-model (model 100 30 :session-id "offer-in-already")
+        (let ((dialog (open-offer-wizard model (append (go-offer) (list :installed t)))))
+          (dialog-keys model :enter)
+          (is (= 0 installs) "nothing installed again")
+          (is (eq :api-key (nle::connect-dialog-step dialog)) "straight to its key"))))))
+
+(deftest connect-a-sign-in-that-names-no-page-says-why-over-the-list ()
+  ;; A command that answers no page to sign in at -- a refusal naming only
+  ;; the loopback address its browser would come back to -- waits for
+  ;; nothing: the list comes back and says why, as a refused install does.
+  (with-stubbed-fdefinitions ((nle::install-offered-cell (model offer) model offer (list :commands '()))
+                              (nle::gateway-slash-answer (model line)
+                                model line
+                                (nlk:decode-json "{\"text\": \"nl-codex: callback port 1455 is in use; OpenAI accepts only http://localhost:1455/auth/callback\"}"))
+                              (nle::open-target (url) url (error "nothing to open")))
+    (with-frame-model (model 100 30 :session-id "offer-no-page")
+      (let ((dialog (open-offer-wizard model (go-offer :provider "nl-codex" :cell "nl-cell-codex"
+                                                       :sign-in "/nl-codex login"))))
+        (dialog-keys model :enter)
+        (is (eq :provider (nle::connect-dialog-step dialog)) "back on the list")
+        (is (rows-carry-p "nl-codex: callback port 1455 is in use" (nle::compose-frame model)))))))
+
 (deftest connect-an-offered-provider-signs-in-in-the-wizard-then-goes-on-to-its-models ()
   ;; A folder that signs in with a command (Codex's /openai-codex login):
   ;; once it is in, the command runs, its page opens in the browser, and the
@@ -222,9 +257,9 @@
                                                            (rows-carry-p "Sign in at auth.example.test/authorize" frame)
                                                            (rows-carry-p "Code ABCD-1234" frame)
                                                            (rows-carry-p address frame)
-                                                           ;; one blank row between each part
+                                                           ;; one blank row between each part, the title's too
                                                            (let ((at (mapcar (lambda (needle) (row-index-of needle frame))
-                                                                             (list "waiting for the sign-in" "Sign in at" address "Code ABCD-1234"))))
+                                                                             (list "Connect Sign in" "waiting for the sign-in" "Sign in at" address "Code ABCD-1234"))))
                                                              (and (every #'integerp at)
                                                                   (mapcar #'- (rest at) (butlast at))))
                                                            (rows-carry-p "Open this address" frame)
@@ -232,7 +267,7 @@
                                       nil)
             (dialog-keys model :enter))
           (is (equal '("/nl-codex login") ran) "the folder's sign-in runs once")
-          (is (equal '(:signing-in t t t (2 2 2) nil nil) seen) "the wizard waits on where to sign in, the whole address, the code, a blank row apart, no prose")
+          (is (equal '(:signing-in t t t (2 2 2 2) nil nil) seen) "the wizard waits on where to sign in, the whole address, the code, a blank row apart, no prose")
           (is (equal (list address) opened) "the page opens in the browser")
           (is (equal '("nl-codex") picked) "once it answers, the pick goes on to its models")
           (is (null model.dialog)))))))

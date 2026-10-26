@@ -2643,7 +2643,8 @@ reads, since a cell's lanes and inventory hooks run here only."
                                                       "provider" (getf offer :provider)
                                                       "name" (getf offer :name)
                                                       "sign_in" (getf offer :sign-in)
-                                                      "description" (getf offer :description)))
+                                                      "description" (getf offer :description)
+                                                      :opt "installed" (getf offer :installed)))
                                        (ignore-errors (provider-offers)))))))
 
 ;;; --- slash commands ---------------------------------------------------------
