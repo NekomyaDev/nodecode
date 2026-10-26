@@ -24,6 +24,20 @@
       (is-shape fact (.detail "on, but nothing serves the store") (.tone eq :warn)))
     (is (null (fake-systemd-calls fake)) "and systemd was never asked")))
 
+(deftest health-says-when-the-organism-runs-pristine
+    (with-saved-globals ((nlk:*pristine* nil) (nlk::*pristine-reason* nil)))
+  ;; A gateway that boots pristine has no cell, so a shell attached to it
+  ;; reads every cell command as unknown; the floor and why are a fact
+  ;; /doctor and the landing screen say, not only the layer's session.
+  (is (null (health-fact-named :self)) "nothing to say on a folder that loaded")
+  (setf nlk:*pristine* t
+        nlk::*pristine-reason* "the self loaded under key e04aad67 died before it served")
+  (is-present (fact (health-fact-named :self)) "the floor, once it stands on it"
+    (is (search "pristine" (nle::health-fact-detail fact)))
+    (is (search "died before it served" (nle::health-fact-detail fact)) "and why")
+    (is (eq :danger (nle::health-fact-tone fact)) "the landing screen shows :danger")
+    (is (search "restart" (nle::health-fact-remedy fact)))))
+
 (deftest health-says-when-no-model-is-pinned (with-saved-globals (nle::*model-config-refusal*))
   ;; A fresh image carries a baked default, so the footer always names SOME
   ;; model and an operator reads that as configured. It is not the same

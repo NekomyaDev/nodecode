@@ -9647,13 +9647,21 @@ quietly."
     (format t "~&[CP-ISSUE-20260912-001] gateway ready~%")
     (let ((heartbeat-noted nil))
       (loop
+        ;; A candidate that loses did not die: the receipt BOOT-CELLS left
+        ;; before its load goes with it, or the launch after reads a self that
+        ;; died before serving and runs pristine -- no cell, so no cell's
+        ;; command. Most visible on Windows, where every serve loads directly
+        ;; and so leaves one.
         (if wait
             (await-free-store path :tick #'nlk:systemd-watchdog)
-            (when (nlk::store-lease-held-p path) (return :lost)))
+            (when (nlk::store-lease-held-p path)
+              (nlk:take-self-receipt)
+              (return :lost)))
         (with-handlers ((nlk::store-in-use (refusal)
                           (format t "~&election lost: ~a~%" refusal)
                           (finish-output)
                           (unless wait
+                            (nlk:take-self-receipt)
                             (return :lost))))
           ;; The models.dev catalog is parsed beside the boot, not by its
           ;; first reader: the first turn's model, /models and the setup

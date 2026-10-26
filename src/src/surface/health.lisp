@@ -64,6 +64,21 @@ reflection's note left out (NLK::+NOTE-SOURCE+); NIL when it cannot be read."
   (when-let (section (find name (nlk:sections) :key #'nlk:section-owner :test #'string=))
     (nlk:section-key (nlk:section-path section))))
 
+(defun pristine-fact ()
+  "The floor this organism stands on, when it runs pristine: generation 0,
+nothing of the folder loaded, so no cell and no cell's command. NIL otherwise."
+  ;; Said where the operator looks -- the landing screen's :danger rows and /doctor --
+  ;; and not only to the layer's session (HAND-FAILED-SELF): a shell attached
+  ;; to a pristine gateway otherwise reads every cell command as unknown.
+  (when nlk:*pristine*
+    (let ((held (>= (or (json-value (nlk:read-death-marker) :integer "deaths") 0) 2)))
+      (health-fact :self "self"
+                   (format nil "pristine: generation 0, no cell loaded -- ~a" (nlk:pristine-reason))
+                   :tone :danger
+                   :remedy (if held
+                               "two deaths in a row hold it: restore a generation (nodecode rollback N), or delete generations/failed.json, then restart nodecode"
+                               "restart nodecode: the launch after retries the folder")))))
+
 (defun health-facts (&aux (refusal *model-config-refusal*)
                           (records (or (ignore-errors (nlk:cells)) '()))
                           (loaded (remove-if-not (lambda (record) (eq record.state :loaded)) records))
@@ -77,6 +92,7 @@ reflection's note left out (NLK::+NOTE-SOURCE+); NIL when it cannot be read."
   ;; its vocabulary to allow it.
   (remove nil
           (append
+           (list (pristine-fact))
            (list (with-json ((provider :string "general" "default_model" "provider")
                              (model :string "general" "default_model" "model"))
                      ;; A turn binds the config's pin, never the baked default the footer names.

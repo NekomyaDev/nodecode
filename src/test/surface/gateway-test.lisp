@@ -3671,6 +3671,22 @@ request."
         (is (not (probe-file (nlk::lease-path-for-store path))))
         (is (not (probe-file path)))))))
 
+(deftest a-candidate-that-loses-the-election-takes-its-receipt
+    (with-saved-globals ((nlk:*pristine* nil) (nlk::*pristine-reason* nil)))
+  ;; A serve leaves booting.<pid> before its load (BOOT-CELLS :RECEIPT). One
+  ;; that loses did not die: a receipt it left read at the next launch as a
+  ;; self that died before serving, which ran pristine -- no cell, every cell
+  ;; command unknown (/qa on Windows, where every serve leaves one).
+  (with-temp-directory (dir "resurrect-receipt")
+    (let ((path (merge-pathnames "history.db" dir))
+          (nlk:*home* dir))
+      (nlk:write-self-receipt "a-key")
+      (is (probe-file (nlk::self-receipt-path)) "the receipt a serve leaves before its load")
+      (with-lock-holder ((nlk::lock-path-for-store path))
+        (is (eq :lost (nle:serve-organism-candidate :store-path path))))
+      (is (null (probe-file (nlk::self-receipt-path))) "a lost election takes it")
+      (is (null (nlk:decide-pristine)) "and the launch after loads the folder"))))
+
 ;;; --- start-confirmed acceptance latch ----------------------------------------
 ;;; The latch itself is GATEWAY-BINDS-KERNEL-ASSIGNED-PORT-AND-PUBLISHES-IT's.
 
