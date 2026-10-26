@@ -45,10 +45,12 @@ Then run `nodecode`. The first launch opens setup. If another coding agent lives
 ## What's different
 
 <picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-orchid-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-orchid-dark.png 3.67x">
+  <source media="(max-width: 479px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light.png 1x">
+  <source media="(max-width: 479px)" srcset="resources/assets/readme/emblem-orchid-dark.png 1x">
+  <source media="(max-width: 1279px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light-stack.png 2.62x">
+  <source media="(max-width: 1279px)" srcset="resources/assets/readme/emblem-orchid-dark-stack.png 2.62x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-orchid-light-side.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-orchid-dark-side.png 3.67x">
   <img align="left" alt="An orchid branch in flower, drawn in cells" src="resources/assets/readme/emblem-orchid-dark.png">
 </picture>
 
@@ -59,10 +61,12 @@ An orchid opens new flowers while it keeps growing. An installed Nodecode update
 <br clear="left">
 
 <picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-dandelion-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-dandelion-dark.png 3.67x">
+  <source media="(max-width: 479px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light.png 1x">
+  <source media="(max-width: 479px)" srcset="resources/assets/readme/emblem-dandelion-dark.png 1x">
+  <source media="(max-width: 1279px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light-stack.png 2.62x">
+  <source media="(max-width: 1279px)" srcset="resources/assets/readme/emblem-dandelion-dark-stack.png 2.62x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-dandelion-light-side.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-dandelion-dark-side.png 3.67x">
   <img align="left" alt="Two dandelion clocks shedding seeds as single cells" src="resources/assets/readme/emblem-dandelion-dark.png">
 </picture>
 
@@ -73,10 +77,12 @@ A cell is a folder that teaches Nodecode something new: a chat room it can live 
 <br clear="left">
 
 <picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-nautilus-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-nautilus-dark.png 3.67x">
+  <source media="(max-width: 479px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light.png 1x">
+  <source media="(max-width: 479px)" srcset="resources/assets/readme/emblem-nautilus-dark.png 1x">
+  <source media="(max-width: 1279px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light-stack.png 2.62x">
+  <source media="(max-width: 1279px)" srcset="resources/assets/readme/emblem-nautilus-dark-stack.png 2.62x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-nautilus-light-side.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-nautilus-dark-side.png 3.67x">
   <img align="left" alt="A nautilus in its shell, drawn in cells" src="resources/assets/readme/emblem-nautilus-dark.png">
 </picture>
 
@@ -87,10 +93,12 @@ Like an organism, Nodecode decides what stays in its context and what goes, and 
 <br clear="left">
 
 <picture>
-  <source media="(max-width: 767px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 2x">
-  <source media="(max-width: 767px)" srcset="resources/assets/readme/emblem-mccarthy-dark.png 2x">
-  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 3.67x">
-  <source srcset="resources/assets/readme/emblem-mccarthy-dark.png 3.67x">
+  <source media="(max-width: 479px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light.png 1x">
+  <source media="(max-width: 479px)" srcset="resources/assets/readme/emblem-mccarthy-dark.png 1x">
+  <source media="(max-width: 1279px) and (prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light-stack.png 2.62x">
+  <source media="(max-width: 1279px)" srcset="resources/assets/readme/emblem-mccarthy-dark-stack.png 2.62x">
+  <source media="(prefers-color-scheme: light)" srcset="resources/assets/readme/emblem-mccarthy-light-side.png 3.67x">
+  <source srcset="resources/assets/readme/emblem-mccarthy-dark-side.png 3.67x">
   <img align="left" alt="John McCarthy, who made Lisp, drawn in cells" src="resources/assets/readme/emblem-mccarthy-dark.png">
 </picture>
 
