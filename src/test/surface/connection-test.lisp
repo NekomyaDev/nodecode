@@ -84,23 +84,25 @@
         (is (equal "privacy" (nle::picker-dialog-command :privacy)) "a second click on the knob closes it")
         (is (equal "anthropic/claude-opus-5-5 · Anthropic" (first labels)))
         (is (equal "Connection secure · Not private" (second labels)))
-        (is (some (lambda (label) (and (search "✓ Encrypted" label) (search "✓ Intercepted" label))) labels) "the facts as pills side by side")
+        (is (some (lambda (label) (search "✓ │ Encrypted" label)) labels) "the facts as pills")
         (is (>= (nle::docked-dialog-frame-rows model) (length labels)) "the box is read whole, never scrolled")))))
 
-(deftest connection-pills-wrap-when-the-row-runs-out ()
-  ;; Asked 2026-10-26: cubes "stacked horizontally and vertically if it spans more", then "pills
-  ;; maybe (a little too big)": one line a fact, as many across as the panel holds.
+(deftest connection-pills-stack-with-their-dividers-in-line ()
+  ;; Asked 2026-10-26: "vertical stack, nicely spaced out, keep pill design", "nicely tucked
+  ;; together", "with dividers in the pill".
   (let ((check (nle::connection-verdict "anthropic" (list* :host "api.anthropic.com" :cloudflare t +connection-tls+)))
         (key '("anthropic" . "anthropic/claude-opus-5-5")))
-    (flet ((pills (room) (remove-if-not #'nle::picker-row-paint (nle::connection-dialog-rows key check room)))
-           (width (row) (nle::segs-display-width (funcall (nle::picker-row-paint row) nil 0))))
-      (let ((wide (pills 400)) (narrow (pills 100)) (one (pills 20))
-            (facts (count-if #'first (getf check :rows))))
-        (is (= 1 (length wide)) "every pill on one line when the panel holds them")
-        (is (< 1 (length narrow) facts) "a narrower panel wraps the pills onto more lines, several to a line")
-        (is (every (lambda (row) (<= (width row) 100)) narrow) "no line of pills runs past the panel")
-        (is (= facts (length one)) "one to a line when nothing more fits")
-        (is (search "✗ Readable by" (nle::picker-row-label (first wide))))))))
+    (flet ((rows (room) (nle::connection-dialog-rows key check room))
+           (text (row) (format nil "~{~a~}" (mapcar #'nle::seg-text (funcall (nle::picker-row-paint row) nil 0)))))
+      (let* ((rows (rows 400))
+             (start (position-if #'nle::picker-row-paint rows))
+             (pills (remove-if-not #'nle::picker-row-paint rows))
+             (facts (count-if #'first (getf check :rows))))
+        (is (= facts (length pills)) "one pill a fact, however wide the panel")
+        (is (every #'nle::picker-row-paint (subseq rows start (+ start facts))) "stacked with no blank line between")
+        (is (= 1 (length (remove-duplicates (mapcar (lambda (row) (position #\│ (text row) :from-end t)) pills)))) "the dividers line up down the stack")
+        (is (some (lambda (row) (search "✗ │ Readable by" (nle::picker-row-label row))) pills))
+        (is (every (lambda (row) (<= (nle::segs-display-width (funcall (nle::picker-row-paint row) nil 0)) 40)) (remove-if-not #'nle::picker-row-paint (rows 40))) "no pill runs past the panel")))))
 
 (deftest connection-knob-leads-the-footers-right-lane (with-temp-store ())
   (let ((nle::*connection-checks* (make-hash-table :test #'equal))
