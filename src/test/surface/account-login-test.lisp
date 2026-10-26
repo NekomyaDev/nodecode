@@ -319,8 +319,8 @@
       (is (equal '("Today, $0.03 across 1 session.") waiting) "a tab still adding up takes them when its read lands"))))
 
 (deftest account-badge-opens-the-account-alone (with-temp-store ())
-  ;; v1se.thom, 2026-10-25: the footer's account badge opened /usage, whose range tabs and spend
-  ;; breakdown he called useless there -- "just show the Nodecode.ai account and the API credit
+  ;; Asked 2026-10-25: the footer's account badge opened /usage, whose range tabs and spend
+  ;; breakdown were called useless there -- "just show the Nodecode.ai account and the API credit
   ;; box, thats it". The badge's click runs EXECUTE-SLASH-COMMAND on its link's name.
   (let ((model (make-frame-model 110 40))
         (reads '()))

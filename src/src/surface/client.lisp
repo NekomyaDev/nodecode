@@ -5655,7 +5655,7 @@ none' in the dialog until the next prompt (checkout audit, 2026-10-22)."
 ;;; --- /account ----------------------------------------------------------------
 ;;; What the footer's account badge opens: the nodecode.ai account alone, the
 ;;; plan's slab and the API credit's, no ranges and none of /usage's breakdown
-;;; -- v1se.thom, 2026-10-25: "just show the Nodecode.ai account and the API
+;;; -- asked 2026-10-25: "just show the Nodecode.ai account and the API
 ;;; credit box, thats it". No headless arm: a room or a page shown this home's
 ;;; balance would read someone's account.
 
