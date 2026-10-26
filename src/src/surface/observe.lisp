@@ -352,10 +352,11 @@ days, today counting as one -- \"today\", \"30d\", \"all\" (NIL), else seven."
 
 (nlk:access (sum usage-sum))
 
-(defun add-usage (sum session input cached write output cost)
-  "Count one round of SESSION into SUM; COST NIL when it has no price."
-  (incf sum.calls)
-  (when cost (incf sum.cost cost) (incf sum.priced))
+(defun add-usage (sum session input cached write output cost &optional (rounds 1))
+  "Count ROUNDS rounds of SESSION, these their summed counts, into SUM; COST
+NIL when they have no price."
+  (incf sum.calls rounds)
+  (when cost (incf sum.cost cost) (incf sum.priced rounds))
   (incf sum.input input)
   (incf sum.cached cached)
   (incf sum.write write)
@@ -510,6 +511,183 @@ fact's transaction, including late reflection/source facts and rollback.")
                  in (sort rows (descending #'third #'fourth))
                  collect (json-object "provider" provider "model" model "turns" turns))))
 
+;;; --- the usage projection -------------------------------------------------
+;;; What /usage and the Dashboard add up, one narrow row per round and per
+;;; model request, kept by triggers inside the fact's own transaction and
+;;; derived again whenever its shape changes: rebuildable, never authority.
+;;; Read straight off the log, a week's rounds cost a JSON parse of every
+;;; usage fact the store holds (the log has no index on its clock) and a Lisp
+;;; list per round: 2.4 s for 7 days, 5.4 s for all, and the four tabs /usage
+;;; reads at once took 7.5 s to show the first (asked 2026-10-26: "it takes
+;;; forever"). Here a range is a slice of a table ordered by its clock, and
+;;; SQLite hands back sums.
+
+(defun json-number-sql (key &optional (default "null"))
+  "The SQL reading KEY out of a fact's payload when it is a number, else DEFAULT."
+  (let ((value (first (payload-columns key))))
+    (format nil "case when typeof(~a) in ('integer', 'real') then ~a else ~a end" value value default)))
+
+(defun usage-rounds-fill-sql (&optional scope)
+  "Insert SCOPE's (or the log's) turn.usage facts into usage_rounds, each
+number as USAGE-JSON counts it: a token count that is no number counts 0, a
+cost only when it is known."
+  (format nil "insert or replace into usage_rounds
+                 (occurred_at, log_position, session_id, model, provider,
+                  input, cached, write, output, cost, voided)
+      select occurred_at, log_position, session_id, ~{~a~^, ~},
+             case when json_extract(payload, '$.cost_known') = 1 then ~a end,
+             coalesce(json_extract(payload, '$.voided') = 1, 0)
+        from events where kind = '~a'~@[ and ~a~]"
+          (append (payload-columns "model" "provider")
+                  (loop for key in '("input-tokens" "cached-input-tokens" "cache-write-tokens"
+                                     "output-tokens")
+                        collect (json-number-sql key "0")))
+          (json-number-sql "cost_usd") nlk::+kind-turn-usage+ scope))
+
+(defun request-timings-fill-sql (&optional scope)
+  "Insert SCOPE's (or the log's) provider.request facts into request_timings:
+each request's wait for its first token and the time it spent writing."
+  (format nil "insert or replace into request_timings
+                 (occurred_at, log_position, model, provider, ttft, streamed)
+      select occurred_at, log_position, ~{~a~^, ~}, ~a, ~a
+        from events where kind = '~a'~@[ and ~a~]"
+          (payload-columns "model" "provider") (json-number-sql "ttft-ms")
+          (json-number-sql "stream-duration-ms") nlk::+kind-provider-request+ scope))
+
+(defparameter *usage-rounds-schema*
+  (list
+   (list "table" "usage_rounds"
+         "create table usage_rounds (
+            occurred_at text not null, log_position integer not null,
+            session_id text, model, provider,
+            input not null, cached not null, write not null, output not null,
+            cost, voided integer not null,
+            primary key (occurred_at, log_position)) without rowid")
+   (list "table" "request_timings"
+         "create table request_timings (
+            occurred_at text not null, log_position integer not null,
+            model, provider, ttft, streamed,
+            primary key (occurred_at, log_position)) without rowid")
+   (list "trigger" "usage_rounds_follow_the_log"
+         (format nil "create trigger usage_rounds_follow_the_log
+            after insert on events when new.kind in ('~a', '~a')
+            begin ~a; ~a; end"
+                 nlk::+kind-turn-usage+ nlk::+kind-provider-request+
+                 (usage-rounds-fill-sql "log_position = new.log_position")
+                 (request-timings-fill-sql "log_position = new.log_position"))))
+  "The usage projection: each table keyed by its clock first, so a range is
+one ordered slice of it.")
+
+(defun projection-current-p (handle schema)
+  "True when every entry of SCHEMA stands in HANDLE's store as SCHEMA says it."
+  (every (lambda (entry)
+           (destructuring-bind (type name sql) entry
+             (equalp sql (sqlite:execute-single
+                          handle "select sql from sqlite_master where type = ? and name = ?"
+                          type name))))
+         schema))
+
+(defun prepare-usage-rounds (handle)
+  "Discard a usage projection of another shape before the schema is applied."
+  (unless (projection-current-p handle *usage-rounds-schema*)
+    (dolist (entry (reverse *usage-rounds-schema*))
+      (sqlite:execute-non-query handle (format nil "drop ~a if exists ~a" (first entry) (second entry))))))
+
+(defun open-usage-rounds ()
+  "Install the usage projection and derive it once from the log."
+  (nlk::with-store-transaction (handle)
+    ;; Rechecked after the kernel schema, as OPEN-MODEL-HISTORY is: a
+    ;; replaced events table took the trigger with it.
+    (prepare-usage-rounds handle)
+    (unless (sqlite:execute-single handle
+                                   "select 1 from sqlite_master where type = 'table' and name = 'usage_rounds'")
+      (dolist (entry *usage-rounds-schema*)
+        (sqlite:execute-non-query handle (third entry)))
+      (sqlite:execute-non-query handle (usage-rounds-fill-sql))
+      (sqlite:execute-non-query handle (request-timings-fill-sql)))))
+
+(pushnew 'prepare-usage-rounds nlk::*schema-prepare-hooks*)
+(pushnew 'open-usage-rounds nlk::*store-open-hooks*)
+
+(defun usage-range-sql (where)
+  "WHERE, the log's clock bound of a usage range, as a projection's own."
+  (and where (cons "occurred_at >= ?" (rest where))))
+
+(defun usage-round-groups (where)
+  "The rounds over WHERE summed by session, local day, model, provider,
+whether voided, whether priced, and the band of prompt sizes they fall in
+-- each of the bands bounded by every tier size their models' prices name,
+so one band's rounds bill at one tier of each price. => (values ROWS
+SIZES), each row (SESSION DAY MODEL PROVIDER VOIDED PRICED BAND ROUNDS
+INPUT CACHED WRITE OUTPUT COST), SIZES the bands' bounds, ascending."
+  (nlk::with-store-handle (handle)
+    (let* ((clause (format nil "~@[ where ~a~]" (first where)))
+           (sizes (sort (remove-duplicates
+                         (loop for (model provider)
+                                 in (apply #'nlk::sql-rows handle
+                                           (format nil "select distinct model, provider from usage_rounds~a" clause)
+                                           (rest where))
+                               append (price-tier-sizes (model-price model provider))))
+                        #'<))
+           (band (if sizes
+                     (format nil "~{(input + cached + write > ~a)~^ + ~}" sizes)
+                     "0")))
+      (values (apply #'nlk::sql-rows handle
+                     (format nil "select session_id, date(occurred_at, 'localtime'), model, provider,
+                                         voided, cost is not null, ~a, count(*),
+                                         sum(input), sum(cached), sum(write), sum(output), sum(cost)
+                                    from usage_rounds~a group by 1, 2, 3, 4, 5, 6, 7" band clause)
+                     (rest where))
+              sizes))))
+
+(defun request-waits (where)
+  "Over WHERE, the requests' waits for a first token: => (values P50 P90
+MEDIANS STREAMED), P50 and P90 every request's, MEDIANS each model's
+middle wait as ((MODEL PROVIDER) . MS), STREAMED each model's time spent
+writing as ((MODEL PROVIDER) . MS). Each is MEDIAN-INTEGER's pick: the
+wait at that share of the count, rounded down, read as one row of the
+waits in order -- a window over every request sorted them twice."
+  (nlk::with-store-handle (handle)
+    (let* ((clause (format nil "~@[ and ~a~]" (first where)))
+           (models (apply #'nlk::sql-rows handle
+                          (format nil "select model, provider, count(ttft), sum(streamed)
+                                         from request_timings where 1~a group by 1, 2" clause)
+                          (rest where)))
+           (count (reduce #'+ models :key #'third)))
+      (flet ((pick (at &optional (scope "") &rest keys)
+               (apply #'sqlite:execute-single handle
+                      (format nil "select ttft from request_timings where ttft is not null~a~a
+                                    order by ttft limit 1 offset ?" scope clause)
+                      (append keys (rest where) (list at)))))
+        (values (and (plusp count) (pick (floor count 2)))
+                (and (plusp count) (pick (floor (* 9 count) 10)))
+                (loop for (model provider waits) in models
+                      when (plusp waits)
+                        collect (cons (list model provider)
+                                      (pick (floor waits 2) " and model is ? and provider is ?"
+                                            model provider)))
+                (loop for (model provider nil writing) in models
+                      when writing collect (cons (list model provider) writing)))))))
+
+(defun usage-session-entries ()
+  "Each session's (PARENT SOURCE FOLDER) by its id: what USAGE-JSON asks of
+the directory, without LIST-SESSIONS's every column."
+  (let ((entries (make-hash-table :test #'equal)))
+    (nlk::with-store-handle (handle)
+      (loop for (id parent source cwd)
+              in (nlk::sql-rows handle "select session_id, parent, source, cwd from session_directory
+                                         where created_at is not null")
+            do (setf (gethash id entries)
+                     (list (and (stringp parent) parent) source (or cwd "")))))
+    entries))
+
+(defun usage-session-title (id)
+  "Session ID's title, else its first prompt, else empty."
+  (nlk::with-store-handle (handle)
+    (or (sqlite:execute-single handle "select coalesce(title, prompt, '') from session_directory
+                                        where session_id = ?" id)
+        "")))
+
 (defun usage-json (range &aux (now (get-universal-time)))
   "What every session spent over RANGE (USAGE-RANGE-START): the totals, each
 day, each model with its failed attempts, each folder with its failed turns,
@@ -517,9 +695,7 @@ and the costliest sessions."
   (nlk::with-store-reader ()
     (let* ((start (usage-range-start range now))
            (where (and start (list "occurred_at >= ?" (iso-time (- start +unix-epoch+)))))
-           (rows (nlk:events :kind nlk::+kind-turn-usage+ :where where
-                             :as :rows :columns +usage-columns+))
-           (entries (make-hash-table :test #'equal))
+           (entries (usage-session-entries))
            (prices (make-hash-table :test #'equal))
            (total (make-usage-sum)) (days (make-hash-table :test #'equal))
            (models (make-hash-table :test #'equal)) (folders (make-hash-table :test #'equal))
@@ -530,59 +706,52 @@ and the costliest sessions."
            ;; (a buyer's /usage said `1 call has no price', checkout audit
            ;; 2026-10-22).
            (account 0))
-      (dolist (entry (nlk:list-sessions))
-        (setf (gethash (getf entry :id) entries) entry))
       (labels ((root (id &aux (entry (gethash id entries)))
                  ;; A reflection's spend is the session's it reflected on.
-                 (if (and entry (getf entry :parent)
-                          (equal (getf entry :source) nlk::+note-source+))
-                     (root (getf entry :parent))
+                 (if (and entry (first entry) (equal (second entry) nlk::+note-source+))
+                     (root (first entry))
                      id))
-               (folder (id) (or (getf (gethash id entries) :working-directory) ""))
-               (sum-of (table key) (alexandria:ensure-gethash key table (make-usage-sum)))
-               (count-of (value) (if (realp value) (round value) 0)))
-        (loop for (session at model provider input cached write output known cost voided) in rows
-              for root = (root session)
-              for day = (when-let (universal (iso-universal at)) (local-day universal))
-              for counts = (list (count-of input) (count-of cached) (count-of write) (count-of output))
-              for price = (and (eql known 1) (realp cost) cost)
-              if (eql voided 1)
-                ;; A voided attempt is no round, but its spend was real.
-                do (when price (incf (us-cost total) price))
-              else do (when (and (null price) (equal provider "nodecode")) (incf account))
-                      (dolist (sum (remove nil (list total (and day (sum-of days day))
-                                                     (sum-of models (list model provider))
-                                                     (sum-of folders (folder root))
-                                                     (sum-of sessions root))))
-                        (apply #'add-usage sum root (append counts (list price))))
-                      (when-let (saving (and (or (plusp (second counts)) (plusp (third counts)))
-                                             (round-cache-saving
+               (folder (id) (or (third (gethash id entries)) ""))
+               (sum-of (table key) (alexandria:ensure-gethash key table (make-usage-sum))))
+        (multiple-value-bind (groups sizes) (usage-round-groups (usage-range-sql where))
+          (loop for (session day model provider voided priced band rounds input cached write output cost)
+                  in groups
+                for root = (root session)
+                for price = (and (eql priced 1) cost)
+                if (eql voided 1)
+                  ;; A voided attempt is no round, but its spend was real.
+                  do (when price (incf (us-cost total) price))
+                else do (when (and (null price) (equal provider "nodecode")) (incf account rounds))
+                        (dolist (sum (remove nil (list total (and day (sum-of days day))
+                                                       (sum-of models (list model provider))
+                                                       (sum-of folders (folder root))
+                                                       (sum-of sessions root))))
+                          (add-usage sum root input cached write output price rounds))
+                        ;; One band's rounds bill at one tier of the price: its
+                        ;; four rates, handed every round's counts at once.
+                        (when-let (rates (and (or (plusp cached) (plusp write))
                                               (alexandria:ensure-gethash (cons model provider) prices
-                                                                         (model-price model provider))
-                                              :input-tokens (first counts)
-                                              :cached-input-tokens (second counts)
-                                              :cache-write-tokens (third counts))))
-                        (incf saved saving)))
-      (let* ((turns (nlk:events :kind (list nlk::+kind-turn-completed+ nlk::+kind-turn-failed+
-                                            nlk::+kind-turn-cancelled+)
-                                :where (asked-where where) :as :rows
-                                ;; A turn's time is its end fact's clock less its
-                                ;; start's, the start found through events_by_turn.
-                                :columns '("session_id"
-                                           "(select cast(round((julianday(events.occurred_at) - julianday(s.occurred_at)) * 86400000) as integer)
+                                                                         (model-price model provider))))
+                          (incf saved (round-cache-saving
+                                       (price-tier rates (if (plusp band) (1+ (nth (1- band) sizes)) 0))
+                                       :input-tokens input :cached-input-tokens cached
+                                       :cache-write-tokens write)))))
+        (let ((turns (nlk:events :kind (list nlk::+kind-turn-completed+ nlk::+kind-turn-failed+
+                                             nlk::+kind-turn-cancelled+)
+                                 :where (asked-where where) :as :rows
+                                 ;; A turn's time is its end fact's clock less its
+                                 ;; start's, the start found through events_by_turn.
+                                 :columns '("session_id"
+                                            "(select cast(round((julianday(events.occurred_at) - julianday(s.occurred_at)) * 86400000) as integer)
                                                from events s where s.turn_id = events.turn_id and s.kind = 'turn.started')"
-                                           "kind")))
-             (requests (nlk:events :kind nlk::+kind-provider-request+ :where where :as :rows
-                                   :columns (payload-columns "model" "provider" "ttft-ms"
-                                                             "stream-duration-ms")))
-             (waits (sort (loop for (nil nil wait) in requests when (realp wait) collect wait) #'<)))
-        (loop for (session ms kind) in turns
-              for folder = (sum-of folders (folder (root session)))
-              do (incf (us-turns folder))
-                 (when (equal kind nlk::+kind-turn-failed+) (incf (us-failed folder)))
-                 (when (realp ms)
-                   (incf (us-ms (sum-of sessions session)) ms)
-                   (incf (us-ms folder) ms)))
+                                            "kind"))))
+          (loop for (session ms kind) in turns
+                for folder = (sum-of folders (folder (root session)))
+                do (incf (us-turns folder))
+                   (when (equal kind nlk::+kind-turn-failed+) (incf (us-failed folder)))
+                   (when (realp ms)
+                     (incf (us-ms (sum-of sessions session)) ms)
+                     (incf (us-ms folder) ms))))
         ;; A model's attempt failed when it was retried, when the turn moved off
         ;; it (the switch's from-model), or when its provider failure ended the
         ;; turn; the rest of its attempts are its rounds. A failed turn names
@@ -609,57 +778,54 @@ and the costliest sessions."
                                                    "coalesce(json_extract(payload, '$.\"to-provider\"'), json_extract(payload, '$.provider'))")))
               when (plusp (length (first key)))
                 do (push status (us-statuses (sum-of models key))))
-        ;; Each model's waits and the time it spent writing, for its typical wait
-        ;; and its speed.
-        (loop for (model provider wait stream) in requests
-              do (when-let (sum (gethash (list model provider) models))
-                   (when (realp wait) (push wait sum.waits))
-                   (when (realp stream) (incf sum.streamed stream))))
-        (json-object
-         "range" range
-         :opt "from" (and start (iso-time (- start +unix-epoch+)))
-         "totals" (usage-sum-json total
-                                  "unpriced" (- (us-calls total) (us-priced total) account)
-                                  "account_calls" account
-                                  "saved_usd" (float saved 1d0)
-                                  "turns" (nlk:events :kind nlk::+kind-turn-started+ :where (asked-where where)
-                                                      :as :count)
-                                  "failed_turns" (nlk:events :kind nlk::+kind-turn-failed+ :where (asked-where where)
-                                                             :as :count))
-         :opt "wait_p50_ms" (and waits (nth (floor (length waits) 2) waits))
-         :opt "wait_p90_ms" (and waits (nth (floor (* 9 (length waits)) 10) waits))
-         "days" (loop-vector for day in (if start
-                                            (loop for universal from start to now by 86400
-                                                  collect (local-day universal))
-                                            (sort (alexandria:hash-table-keys days) #'string<))
-                             for sum = (sum-of days day)
-                             collect (usage-sum-json sum "day" day))
-         "models" (loop-vector for ((model provider) . sum) in (ranked models)
-                               for wait = (median-integer sum.waits)
-                               for failed = sum.statuses
-                               for attempts = (+ sum.calls (length failed))
-                               ;; Each status the failures met, the commonest first.
-                               for statuses = (sort (remove-duplicates (copy-list failed)) #'>
-                                                    :key (lambda (status) (count status failed)))
-                               collect (apply #'usage-sum-json sum "model" model "provider" provider
-                                              "attempts" attempts "failed" (length failed)
-                                              "error_rate" (/ (length failed) attempts 1d0)
-                                              "statuses" (loop-vector for status in statuses
-                                                                      collect (json-object :opt "status" status
-                                                                                           "count" (count status failed)))
-                                              (append
-                                               (and wait (list "wait_p50_ms" wait))
-                                               ;; Output over the time spent writing it.
-                                               (and (plusp sum.streamed) (plusp sum.output)
-                                                    (list "speed" (round sum.output
-                                                                         (/ sum.streamed 1000)))))))
-         "folders" (loop-vector for (name . sum) in (ranked folders 8)
-                                collect (usage-sum-json sum "folder" name))
-         "sessions" (loop-vector for (id . sum) in (ranked sessions 8)
-                                 for entry = (gethash id entries)
-                                 collect (usage-sum-json sum "id" id
-                                                         "title" (or (getf entry :title) "")
-                                                         "folder" (folder id)))))))))
+        (multiple-value-bind (wait-p50 wait-p90 medians streamed) (request-waits (usage-range-sql where))
+          (json-object
+           "range" range
+           :opt "from" (and start (iso-time (- start +unix-epoch+)))
+           "totals" (usage-sum-json total
+                                    "unpriced" (- (us-calls total) (us-priced total) account)
+                                    "account_calls" account
+                                    "saved_usd" (float saved 1d0)
+                                    "turns" (nlk:events :kind nlk::+kind-turn-started+ :where (asked-where where)
+                                                        :as :count)
+                                    "failed_turns" (nlk:events :kind nlk::+kind-turn-failed+ :where (asked-where where)
+                                                               :as :count))
+           :opt "wait_p50_ms" wait-p50
+           :opt "wait_p90_ms" wait-p90
+           "days" (loop-vector for day in (if start
+                                              (loop for universal from start to now by 86400
+                                                    collect (local-day universal))
+                                              (sort (alexandria:hash-table-keys days) #'string<))
+                               for sum = (sum-of days day)
+                               collect (usage-sum-json sum "day" day))
+           "models" (loop-vector for ((model provider) . sum) in (ranked models)
+                                 ;; Each model's waits and the time it spent
+                                 ;; writing, for its typical wait and its speed.
+                                 for wait = (cdr (assoc (list model provider) medians :test #'equal))
+                                 for writing = (or (cdr (assoc (list model provider) streamed :test #'equal)) 0)
+                                 for failed = sum.statuses
+                                 for attempts = (+ sum.calls (length failed))
+                                 ;; Each status the failures met, the commonest first.
+                                 for statuses = (sort (remove-duplicates (copy-list failed)) #'>
+                                                      :key (lambda (status) (count status failed)))
+                                 collect (apply #'usage-sum-json sum "model" model "provider" provider
+                                                "attempts" attempts "failed" (length failed)
+                                                "error_rate" (/ (length failed) attempts 1d0)
+                                                "statuses" (loop-vector for status in statuses
+                                                                        collect (json-object :opt "status" status
+                                                                                             "count" (count status failed)))
+                                                (append
+                                                 (and wait (list "wait_p50_ms" wait))
+                                                 ;; Output over the time spent writing it.
+                                                 (and (plusp writing) (plusp sum.output)
+                                                      (list "speed" (round sum.output
+                                                                           (/ writing 1000)))))))
+           "folders" (loop-vector for (name . sum) in (ranked folders 8)
+                                  collect (usage-sum-json sum "folder" name))
+           "sessions" (loop-vector for (id . sum) in (ranked sessions 8)
+                                   collect (usage-sum-json sum "id" id
+                                                           "title" (usage-session-title id)
+                                                           "folder" (folder id)))))))))
 
 (define-gateway-route handle-gateway-usage-http (env)
   "GET /api/gateway/usage?range=today|7d|30d|all — what every session spent

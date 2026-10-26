@@ -560,6 +560,7 @@ of stacking."
      ;; `nodecode rpc' to a gateway and its frames back.
      (:file "surface/rpc-test")
      (:file "surface/observe-test")
+     (:file "surface/usage-projection-test")
      ;; sessions-nodes-test drives the same picker rows: a session's own
      ;; nodes under it, the edge each hangs by, and the store's detached
      ;; create that a team seat is minted with.

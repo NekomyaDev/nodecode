@@ -800,16 +800,26 @@ a double-float, or NIL when there is no price or no count at all."
   ;; the input price of the tier the round lands in: an over-count the
   ;; reader can see, never an invented discount.
   (when (and price (or input-tokens output-tokens cached-input-tokens cache-write-tokens))
-    (let* ((prompt (+ (or input-tokens 0) (or cached-input-tokens 0) (or cache-write-tokens 0)))
-           (tier (find-if (lambda (tier) (> prompt (first tier))) (nthcdr 4 price) :from-end t)))
-      (destructuring-bind (input output cache-read cache-write &rest tiers) (or (rest tier) price)
-        (declare (ignore tiers))
-        (float (/ (+ (* (or input-tokens 0) input)
-                     (* (or cached-input-tokens 0) (or cache-read input))
-                     (* (or cache-write-tokens 0) (or cache-write input))
-                     (* (or output-tokens 0) output))
-                  1000000)
-               1d0)))))
+    (destructuring-bind (input output cache-read cache-write)
+        (price-tier price (+ (or input-tokens 0) (or cached-input-tokens 0) (or cache-write-tokens 0)))
+      (float (/ (+ (* (or input-tokens 0) input)
+                   (* (or cached-input-tokens 0) (or cache-read input))
+                   (* (or cache-write-tokens 0) (or cache-write input))
+                   (* (or output-tokens 0) output))
+                1000000)
+             1d0))))
+
+(defun price-tier (price prompt)
+  "PRICE's four rates -- input, output, cache read, cache write -- for a round
+whose prompt is PROMPT tokens: the last of its tiers the prompt is over, else
+its base. A price of those four alone bills every round alike, however many
+rounds' counts it is handed at once."
+  (let ((tier (find-if (lambda (tier) (> prompt (first tier))) (nthcdr 4 price) :from-end t)))
+    (subseq (or (rest tier) price) 0 4)))
+
+(defun price-tier-sizes (price)
+  "The prompt sizes PRICE's tiers begin over, in its order."
+  (mapcar #'first (nthcdr 4 price)))
 
 (defun round-cache-saving (price &key input-tokens cached-input-tokens cache-write-tokens
                                  &allow-other-keys)
