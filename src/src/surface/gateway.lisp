@@ -2726,7 +2726,9 @@ reads, since a cell's lanes and inventory hooks run here only."
                                                 ;; Whether a turn can run on it here, and why not
                                                 ;; in the words that say what to do.
                                                 "ready" (not refusal)
-                                                :opt "refusal" refusal))
+                                                :opt "refusal" refusal
+                                                ;; what its folder calls it (OFFERED-PROVIDER-NAME)
+                                                :opt "name" (ignore-errors (offered-provider-name id))))
                                  'vector)
                          "offers" (map 'vector
                                        (lambda (offer)

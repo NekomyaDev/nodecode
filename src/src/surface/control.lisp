@@ -634,6 +634,22 @@ keeps it and picking it goes straight to the sign-in."
                                         :description (nlk:offer-description entry))
                                   (and installed (list :installed t))))))
 
+(defun offered-provider-name (id &aux (memo (or *provider-offers*
+                                                (progn (ignore-errors (provider-offers))
+                                                       *provider-offers*))))
+  "The name the folder serving provider ID gives it -- its serves line, as
+PROVIDER-OFFERS last read the hub -- installed here or not; NIL when no
+folder names it."
+  ;; Installed and answering, the provider is listed as any connected one is,
+  ;; and models.dev has no row for one such as claude-code: by its id alone,
+  ;; `Claude Pro/Max (Claude Code)' became `claude-code' once picked.
+  (loop for entry in (cdr memo)
+        thereis (loop for serves in (nlk:offer-serves entry)
+                      for name = (cdr (assoc "name" serves :test #'string=))
+                      when (and (string-equal id (cdr (assoc "provider" serves :test #'string=)))
+                                (stringp name) (plusp (length name)))
+                        return name)))
+
 ;;; --- the index: what the organism keeps --------------------------------------------
 ;;; The page's Index tab reads and writes the definitions the organism keeps,
 ;;; the layer's and every knowledge cell's, as the index ranks them. A save is

@@ -3318,6 +3318,10 @@ models -- so a shell never builds the list itself.")
           :connected (ids "connected")
           :listable (ids "listable")
           :local (ids "local")
+          ;; (ID . NAME) for each provider its folder names (OFFERED-PROVIDER-NAME)
+          :names (loop for provider across (or (gethash "providers" body) #())
+                       for name = (gethash "name" provider)
+                       when (stringp name) collect (cons (gethash "id" provider) name))
           ;; (ID . WHY) for each provider no turn can run on there, WHY the
           ;; gateway's words (PROVIDER-TURN-REFUSAL reads them).
           :refusals (loop for provider across (or (gethash "providers" body) #())
@@ -3396,6 +3400,12 @@ run -- builds them from MODEL-CHOICES; a shell reads them from it
 (defun picker-provider-offers ()
   "PROVIDER-OFFERS as the serving image answers it."
   (if *serving* (ignore-errors (provider-offers)) (getf *gateway-models* :offers)))
+
+(defun picker-provider-name (id)
+  "OFFERED-PROVIDER-NAME as the serving image answers it."
+  (if *serving*
+      (ignore-errors (offered-provider-name id))
+      (cdr (assoc id (getf *gateway-models* :names) :test #'string-equal))))
 
 (defun install-offered-cell (model offer)
   "Install OFFER's folder (PROVIDER-OFFERS) through MODEL's organism at the
@@ -4991,7 +5001,10 @@ the list on both shells)."
       (dolist (id (union connected listable :test #'string-equal))
         (unless (find id rows :test #'string-equal :key #'provider)
           (let ((state (if (configured-provider-lane id) (provider-auth-state id) :none)))
-            (row id (or (json-value (configured-provider-entry id) :text "display_name") id) state
+            (row id (or (json-value (configured-provider-entry id) :text "display_name")
+                        (picker-provider-name id)
+                        id)
+                 state
                  (format nil "~d model~:p  ~a" (models id)
                          (or (key-check-state id)
                              (if (eq state :none) "configured" "connected")))))))

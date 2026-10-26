@@ -103,6 +103,33 @@
         (is (equal "nl-codex" (getf (nle::picker-row-value codex) :provider)))
         (is (null (getf (nle::picker-row-value acme) :install)) "a provider no folder serves is as it was")))))
 
+(deftest a-connected-provider-its-folder-serves-keeps-the-folders-name ()
+  ;; Picked, installed and answering, Claude Code's provider is listed as any
+  ;; connected one is, and models.dev has no row for it: it read `claude-code',
+  ;; so typing `claude pro' found nothing. Its folder's name stands, from the
+  ;; hub's read in the serving image, and a shell takes the gateway's.
+  (let ((nle::*provider-offers*
+          (cons (get-universal-time)
+                (list (nlk::make-offer :name "nl-cell-codex" :commit (make-string 40 :initial-element #\d)
+                                       :serves (nlk::serves-entries (list '(:provider "nl-codex" :name "NL Codex"))))))))
+    (with-stubbed-fdefinition (nlk:installed-cell-p (name &optional root) name root t)
+      (is (equal "NL Codex" (nle::offered-provider-name "nl-codex")) "installed, the folder still names it"))
+    (is (null (nle::offered-provider-name "nl-other")))
+    ;; the serving image's list (WITH-MODEL-LISTINGS serves)
+    (with-model-listings (:catalog "{}")
+      (with-stubbed-fdefinitions ((nle::picker-connected-provider-ids () '("nl-codex" "nl-bare"))
+                                  (nle::picker-provider-offers () '()))
+        (let ((labels (mapcar #'nle::picker-row-label (nle::connect-picker-rows))))
+          (is (member "NL Codex" labels :test #'equal) "listed by its folder's name")
+          (is (not (member "nl-codex" labels :test #'equal)) "not by its id")
+          (is (member "nl-bare" labels :test #'equal) "a provider no folder names keeps its id")))))
+  (let ((nle::*serving* nil)
+        (nle::*gateway-models*
+          (nle::gateway-models-facts
+           (nlk:decode-json "{\"models\": [], \"providers\": [{\"id\": \"nl-codex\", \"connected\": true, \"name\": \"NL Codex\"}, {\"id\": \"nl-bare\", \"connected\": true}]}"))))
+    (is (equal "NL Codex" (nle::picker-provider-name "nl-codex")) "a shell reads the gateway's name")
+    (is (null (nle::picker-provider-name "nl-bare")))))
+
 (deftest a-walk-provider-list-takes-the-offers-the-gateway-list-brings ()
   ;; The setup walk's provider list (a connect dialog of no kind) opens
   ;; before the gateway's list lands, and the offers come with that list:
