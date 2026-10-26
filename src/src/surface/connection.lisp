@@ -406,17 +406,32 @@ the pick is known."
                 (hover-seg model (format nil "● ~a" (getf check :label)) target
                            (if (eq :private (getf check :level)) :success :connection)))))))
 
-;;; The box stacks the checklist as pills, one a fact a line, a blank line between each.
+;;; The box stacks the checklist as pills, one a fact a line, a blank line between each. A pill is
+;;; two halves like the footer's account badge: what it checks on the chip grey, padded so every
+;;; split lines up, then the mark and the value on the verdict's own colour.
 
-(defun connection-pill (fact room)
-  "FACT, a checklist row (MARK LABEL VALUE), as one pill no wider than ROOM: the mark, what it
-checks and its value on the toast ground, a column of pad each side."
+(defun connection-fact-text (fact)
+  "FACT, a checklist row (MARK LABEL VALUE), as plain words: its mark, what it checks, its value."
   (destructuring-bind (mark label value) fact
-    (let ((left (list (make-seg :text (case mark (:ok "✓") (:no "✗") (t "?")) :bold t
-                                :tone (case mark (:ok :success) (:no :danger) (t :tool)))
-                      (make-seg :text (format nil " ~a " label) :tone :foreground :bold t)
-                      (make-seg :text value :tone :muted))))
-      (account-slab-line (list left nil) (min room (+ 2 (segs-display-width left))) :toast :pad 1))))
+    (format nil "~a ~a ~a" (case mark (:ok "✓") (:no "✗") (t "?")) label value)))
+
+(defun connection-pill (fact label-width room)
+  "FACT, a checklist row (MARK LABEL VALUE), as one pill no wider than ROOM: what it checks padded
+to LABEL-WIDTH on the chip grey, then the mark and the value on the verdict's colour; where grounds
+do not paint, the same words with the mark and value in that colour."
+  (destructuring-bind (mark label value) fact
+    (let ((tone (case mark (:ok :success) (:no :danger) (t :tool)))
+          (sign (case mark (:ok "✓") (:no "✗") (t "?")))
+          (pad (make-string (max 0 (- label-width (text-display-width label))) :initial-element #\Space)))
+      (clip-segs (if (grounds-shown-p)
+                     (let ((chip (style-for-tone :sheet-chip)))
+                       (list (make-seg :text (format nil " ~a~a " label pad) :bold t
+                                       :tone (vstyle :fg (visual-style-fg chip))
+                                       :ground (vstyle :bg (visual-style-bg chip)))
+                             (account-chip-seg (format nil "~a ~a" sign value) tone)))
+                     (list (make-seg :text (format nil "~a~a " label pad) :tone :foreground :bold t)
+                           (make-seg :text (format nil "~a ~a" sign value) :tone tone :bold t)))
+                 room :mark *dialog-row-overflow-mark*))))
 
 (defun connection-dialog-rows (key check &optional (room 96))
   "The box: the pick KEY names and its verdict, then CHECK's facts as pills stacked one to a line
@@ -424,12 +439,13 @@ with a blank line between each, no wider than ROOM columns, then where the terms
   (when (consp check)
     (let* ((room (max 8 (- room 4)))
            (facts (remove nil (getf check :rows) :key #'first))
+           (label-width (reduce #'max facts :key (lambda (fact) (text-display-width (second fact))) :initial-value 0))
            (source (find nil (getf check :rows) :key #'first))
            (indent (make-seg :text "    " :tone :muted)))
       (flet ((pill-row (fact)
-               (let ((pill (connection-pill fact room))
+               (let ((pill (connection-pill fact label-width room))
                      (row (make-picker-row :heading t :value (list :connection))))
-                 (setf (picker-row-label row) (string-trim " " (format nil "~{~a~}" (mapcar #'seg-text pill)))
+                 (setf (picker-row-label row) (connection-fact-text fact)
                        (picker-row-paint row) (lambda (selected room)
                                                 (declare (ignore selected room))
                                                 (values (cons indent pill) nil)))

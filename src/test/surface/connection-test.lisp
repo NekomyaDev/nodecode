@@ -88,7 +88,8 @@
         (is (>= (nle::docked-dialog-frame-rows model) (length labels)) "the box is read whole, never scrolled")))))
 
 (deftest connection-pills-stack-a-blank-line-apart ()
-  ;; Asked 2026-10-26: "keep pills", "separated vertically (one line gap)".
+  ;; Asked 2026-10-26: "keep pills", "separated vertically (one line gap)", then "half and half
+  ;; colored" like the footer's nodecode.ai badge.
   (let ((check (nle::connection-verdict "anthropic" (list* :host "api.anthropic.com" :cloudflare t +connection-tls+)))
         (key '("anthropic" . "anthropic/claude-opus-5-5")))
     (flet ((rows (room) (nle::connection-dialog-rows key check room)))
@@ -101,6 +102,14 @@
           (is (loop for row in stack for pill = t then (not pill) always (if pill (nle::picker-row-paint row) (equal "" (nle::picker-row-label row)))) "a blank line between each two pills"))
         (is (notany (lambda (row) (search "│" (nle::picker-row-label row))) pills) "no dividers in a pill")
         (is (some (lambda (row) (search "✗ Readable by" (nle::picker-row-label row))) pills))
+        (let* ((nle::*color-profile* :truecolor)
+               (painted (mapcar (lambda (row) (rest (funcall (nle::picker-row-paint row) nil 0)))
+                                (remove-if-not #'nle::picker-row-paint (rows 400))))
+               (grey (nle::visual-style-bg (nle::style-for-tone :sheet-chip))))
+          (is (every (lambda (pill) (= 2 (length pill))) painted) "a pill is two halves")
+          (is (every (lambda (pill) (equal grey (nle::visual-style-bg (nle::seg-ground (first pill))))) painted) "what it checks on the chip grey")
+          (is (equal (nle::visual-style-fg (nle::style-for-tone :danger)) (nle::visual-style-bg (nle::seg-ground (second (third painted))))) "a red fact's value on red")
+          (is (= 1 (length (remove-duplicates (mapcar (lambda (pill) (nle::segs-display-width (list (first pill)))) painted)))) "the halves split in one column down the stack"))
         (is (every (lambda (row) (<= (nle::segs-display-width (funcall (nle::picker-row-paint row) nil 0)) 40)) (remove-if-not #'nle::picker-row-paint (rows 40))) "no pill runs past the panel")))))
 
 (deftest connection-knob-leads-the-footers-right-lane (with-temp-store ())
