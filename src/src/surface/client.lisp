@@ -4516,6 +4516,11 @@ caveats a setup walk ended on (SETUP-ISSUE-SEGS) lead each and are shed last."
           (setf candidates (append (loop for candidate in candidates
                                          collect (append meter (list separator) candidate))
                                    (last candidates))))
+        ;; The connection knob (connection.lisp) leads the meter and is the last thing shed.
+        (when-let (knob (connection-knob-segs model))
+          (setf candidates (append (loop for candidate in candidates
+                                         collect (append knob (list separator) candidate))
+                                   (list knob))))
         (if issues
             (append (mapcar (lambda (candidate) (append issues (list separator) candidate)) candidates)
                     (list issues))
@@ -4618,6 +4623,8 @@ footer."
       ;; attach whose facts land after the first frame is the case this path
       ;; exists to measure (NODECODE_PHASE_LOG).
       (nlk:note-boot-phase "model-facts" (getf facts :model))
+      ;; A model chosen is measured once, before anyone prompts it (connection.lisp).
+      (check-connection model)
       (render-state model))))
 
 (defparameter *first-frame-facts-settle-ms* 25

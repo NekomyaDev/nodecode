@@ -136,6 +136,13 @@
                             :session nil
                             :help-detail
                             "The plan's slab and the API credit's side by side, the one paying now lifted and badged, read again from nodecode.ai when it opens; the footer's account badge opens it. Not signed in, it says so: /login signs in")
+        ;; What the footer's connection knob opens (surface/connection.lisp). No headless arm:
+        ;; the measurement is this shell's own pick.
+        (make-slash-command "privacy"
+                            "Who can read a prompt to the chosen model, and how it gets there"
+                            :session nil
+                            :help-detail
+                            "Measured once when a model is chosen: TLS, post-quantum key exchange, interception and Cloudflare in front; then what the provider's terms say about storing, training and ZDR. Private only for NODECODE's own endpoint; a provider not on the list reads unknown. The footer's connection knob opens it")
         ;; The account's sign-in from inside the shell (surface/account-login.lisp): the
         ;; gateway's organism claims, opens the page and waits, as `nodecode login' does. No
         ;; headless arm: a room or a page signing this home in to someone's account would
