@@ -406,54 +406,49 @@ the pick is known."
                 (hover-seg model (format nil "● ~a" (getf check :label)) target
                            (if (eq :private (getf check :level)) :success :connection)))))))
 
-;;; The box lays the checklist as cubes, one a fact: side by side while the panel has room, the
-;;; next row of cubes under them when it does not.
+;;; The box lays the checklist as pills, one a fact on one line: side by side while the panel has
+;;; room, the next row of pills under them when it does not.
 
-(defparameter *connection-cube-gap* 2 "Columns between two cubes side by side.")
+(defparameter *connection-pill-gap* 1 "Columns between two pills side by side.")
 
-(defun connection-cube-lines (cube)
-  "CUBE, a checklist row (MARK LABEL VALUE), as its slab lines (LEFT RIGHT): a pad, the mark and
-what it checks, the value, a pad."
-  (destructuring-bind (mark label value) cube
-    (list (list nil nil)
-          (list (list (make-seg :text (case mark (:ok "✓") (:no "✗") (t "?")) :bold t
+(defun connection-pill (fact room)
+  "FACT, a checklist row (MARK LABEL VALUE), as one pill no wider than ROOM: the mark, what it
+checks and its value on the toast ground, a column of pad each side."
+  (destructuring-bind (mark label value) fact
+    (let ((left (list (make-seg :text (case mark (:ok "✓") (:no "✗") (t "?")) :bold t
                                 :tone (case mark (:ok :success) (:no :danger) (t :tool)))
-                      (make-seg :text (format nil " ~a" label) :tone :foreground :bold t))
-                nil)
-          (list (list (make-seg :text value :tone :muted)) nil)
-          (list nil nil))))
-
-(defun connection-cube-width (cubes)
-  "One width for every cube: the widest fact with the slab's pads, 18 to 30 columns."
-  (min 30 (max 18 (+ 4 (loop for (nil label value) in cubes
-                             maximize (max (+ 2 (text-display-width label)) (text-display-width value)))))))
+                      (make-seg :text (format nil " ~a " label) :tone :foreground :bold t)
+                      (make-seg :text value :tone :muted))))
+      (account-slab-line (list left nil) (min room (+ 2 (segs-display-width left))) :toast :pad 1))))
 
 (defun connection-dialog-rows (key check &optional (room 96))
-  "The box: the pick KEY names and its verdict, then CHECK's facts as cubes, as many across as ROOM
+  "The box: the pick KEY names and its verdict, then CHECK's facts as pills, as many across as ROOM
 columns hold and the rest in rows under them, then where the terms come from."
   (when (consp check)
-    (let* ((cubes (remove nil (getf check :rows) :key #'first))
+    (let* ((gap *connection-pill-gap*)
+           (room (max 8 (- room 4)))
+           (pills (loop for fact in (getf check :rows) when (first fact) collect (connection-pill fact room)))
            (source (find nil (getf check :rows) :key #'first))
-           (width (connection-cube-width cubes))
-           (gap *connection-cube-gap*)
-           (most (max 1 (min (length cubes) (floor (+ (- room 4) gap) (+ width gap)))))
-           ;; As many rows as the room needs, the cubes shared evenly across them.
-           (across (ceiling (length cubes) (ceiling (length cubes) most)))
+           (lines (let (lines line (used 0))
+                    (dolist (pill pills (nreverse (if line (cons (nreverse line) lines) lines)))
+                      (let ((width (segs-display-width pill)))
+                        (when (and line (> (+ used gap width) room))
+                          (push (nreverse line) lines)
+                          (setf line nil))
+                        (setf used (if line (+ used gap width) width))
+                        (push pill line)))))
            (indent (make-seg :text "    " :tone :muted)))
-      (flet ((line-row (group line)
-               (let ((lines (mapcar (lambda (cube) (nth line (connection-cube-lines cube))) group))
-                     (row (make-picker-row :heading t :value (list :connection))))
+      (flet ((pill-row (line)
+               (let ((row (make-picker-row :heading t :value (list :connection))))
                  (setf (picker-row-label row)
-                       (string-right-trim " " (format nil "~{~a~^  ~}"
-                                                     (mapcar (lambda (slab)
-                                                               (format nil "~{~a~}" (mapcar #'seg-text (first slab))))
-                                                             lines)))
+                       (format nil "~{~a~^ ~}" (mapcar (lambda (pill) (string-trim " " (format nil "~{~a~}" (mapcar #'seg-text pill))))
+                                                      line))
                        (picker-row-paint row)
                        (lambda (selected room)
                          (declare (ignore selected room))
                          (values (cons indent
-                                       (loop for (slab . more) on lines
-                                             append (account-slab-line slab width :toast)
+                                       (loop for (pill . more) on line
+                                             append pill
                                              when more collect (make-seg :text (make-string gap :initial-element #\Space)
                                                                          :tone :muted)))
                                  nil)))
@@ -465,12 +460,12 @@ columns hold and the rest in rows under them, then where the terms come from."
                (make-picker-row :heading t :label (getf check :label) :mark "●" :value (list :connection)
                                 :mark-tone (if (eq :private (getf check :level)) :success :connection))
                (blank))
-         (loop for start from 0 below (length cubes) by across
-               for group = (subseq cubes start (min (length cubes) (+ start across)))
-               unless (zerop start) collect (blank)
-               append (loop for line from 0 below 4 collect (line-row group line)))
+         (loop for (line . more) on lines
+               collect (pill-row line)
+               when more collect (blank))
          (when source
-           (list (make-picker-row :heading t :value (list :connection) :mark " "
+           (list (blank)
+                 (make-picker-row :heading t :value (list :connection) :mark " "
                                   :label (format nil "~a ~a" (second source) (third source))))))))))
 
 (defun slash-privacy-op (model)

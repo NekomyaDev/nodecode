@@ -594,11 +594,11 @@ slab's far edge."
                                   "https://nodecode.ai/account/top-up"))
                          nil)))))))
 
-(defun account-slab-line (line width ground)
-  "LINE, a slab's (LEFT RIGHT), laid WIDTH columns wide on GROUND: two columns of pad each side,
+(defun account-slab-line (line width ground &key (pad 2))
+  "LINE, a slab's (LEFT RIGHT), laid WIDTH columns wide on GROUND: PAD columns of pad each side,
 LEFT clipped to what RIGHT leaves, RIGHT flush to the far pad and dropped when it does not fit."
   (destructuring-bind (left right) line
-    (let* ((inner (max 0 (- width 4)))
+    (let* ((inner (max 0 (- width (* 2 pad))))
            (right (and right (<= (+ (segs-display-width left) 1 (segs-display-width right)) inner) right))
            (left (clip-segs left (max 0 (- inner (segs-display-width right))) :mark *dialog-row-overflow-mark*))
            (gap (max 0 (- inner (segs-display-width left) (segs-display-width right)))))
@@ -612,11 +612,11 @@ LEFT clipped to what RIGHT leaves, RIGHT flush to the far pad and dropped when i
                     seg
                     (let ((copy (copy-seg seg)))
                       (setf (seg-tone copy) (style-with style :bg ground-bg)) copy)))
-              (append (list (make-seg :text (make-string (min 2 width) :initial-element #\Space) :tone :muted))
+              (append (list (make-seg :text (make-string (min pad width) :initial-element #\Space) :tone :muted))
                       left
                       (list (make-seg :text (make-string gap :initial-element #\Space) :tone :muted))
                       right
-                      (list (make-seg :text (make-string (min 2 (max 0 (- width 2))) :initial-element #\Space)
+                      (list (make-seg :text (make-string (min pad (max 0 (- width pad))) :initial-element #\Space)
                                       :tone :muted)))))))
 
 (defun account-slab-rows (key)
