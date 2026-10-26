@@ -6130,6 +6130,56 @@ own provider with one model pinned to another lane.")
       (is (eq :written (nle::persist-shared-config '("providers" "a" "api_key")
                                                    "sk-rotated"))))))
 
+(deftest shared-config-write-leaves-the-file-the-operators-alone ()
+  ;; config.jsonc holds every provider's api_key and the gateway's
+  ;; operator_token: the write that creates it makes it 0600, and a file
+  ;; another writer left readable by the group or by others is narrowed back
+  ;; to its owner (2026-10-26: the operator's own file read 0644).
+  (let* ((directory (temp-path "cfgmode"))
+         (path (merge-pathnames "config.jsonc" directory)))
+    (flet ((mode () (logand #o777 (sb-posix:stat-mode (sb-posix:stat (namestring path))))))
+      (nlk:with-cleanup ((ignore-errors (uiop:delete-directory-tree directory :validate t)))
+        (is (eq :written (nle::persist-shared-config '("general") '(:theme "T") :file path)))
+        (is (= #o600 (mode)) "the file the write creates is the operator's alone")
+        (sb-posix:chmod (namestring path) #o644)
+        (is (eq :written (nle::persist-shared-config '("general" "theme") "U" :file path)))
+        (is (= #o600 (mode)) "and a file left 0644 is narrowed to 0600")))))
+
+(deftest config-get-reads-no-credential-in-any-shape ()
+  ;; A Lean model of SECRET-KEY-P (2026-10-26) found these: a secret's name
+  ;; had to end in api_key, token, secret or password spelled with `_', and
+  ;; only a leaf's own name counted, so an AWS secret_access_key, an MCP
+  ;; server's Authorization header, a camelCase apiKey, a key list under
+  ;; api_key and a password inside a URL all read back in clear. A name
+  ;; further up never counts: sub-cookie is a provider's id.
+  (with-temp-shared-config ("{
+  \"providers\": {
+    \"aws\": { \"access_key_id\": \"AKIDPLAIN\", \"secret_access_key\": \"FAKESAK1\",
+             \"base_url\": \"https://u:FAKEPW2@db.example/v1?key=FAKEQ3&model=m\" },
+    \"cc\": { \"apiKey\": \"FAKECAMEL4\", \"api_key\": [\"FAKEARR5\"], \"token_file\": \"/run/t\" },
+    \"sub-cookie\": { \"sdk\": \"anthropic\" }
+  },
+  \"mcp\": { \"servers\": { \"s\": {
+    \"url\": \"https://mcp.example/x\",
+    \"headers\": { \"Authorization\": \"Bearer FAKEHDR6\", \"Cookie\": \"sid=FAKECK7\", \"X-Api-Key\": \"FAKEX8\" },
+    \"env\": { \"AWS_SECRET_ACCESS_KEY\": \"FAKEENV9\", \"DATABASE_URL\": \"postgres://app:FAKEPW10@h/db\" } } } },
+  \"x\": { \"max_tokens\": 5 }
+}" path)
+    (let ((text (prin1-to-string (nle:config-get))))
+      (dolist (fake '("FAKESAK1" "FAKEPW2" "FAKEQ3" "FAKECAMEL4" "FAKEARR5" "FAKEHDR6"
+                      "FAKECK7" "FAKEX8" "FAKEENV9" "FAKEPW10"))
+        (is (not (search fake text)) fake))
+      (dolist (kept '("AKIDPLAIN" "db.example/v1" "model=m" "/run/t" "https://mcp.example/x"))
+        (is (search kept text) kept)))
+    (is (equal "[set]" (nle:config-get '("mcp" "servers" "s" "headers" "Authorization"))))
+    (is (equal "anthropic" (nle:config-get '("providers" "sub-cookie" "sdk"))) "an id ending in a secret's word hides nothing")
+    (let ((before (uiop:read-file-string path)))
+      (multiple-value-bind (outcome detail)
+          (nle::persist-shared-config '("mcp" "servers" "s") (nle:config-get '("mcp" "servers" "s")))
+        (is (eq :failed outcome) "the redacted read written back is refused")
+        (is (search "env.database_url" (string-downcase detail)) "a URL carrying the sentinel among them"))
+      (is (equal before (uiop:read-file-string path)) "and nothing was written"))))
+
 (deftest shared-config-write-removes-a-member-and-says-so (with-temp-shared-config ("{
   // the operator's own note
   \"providers\": {

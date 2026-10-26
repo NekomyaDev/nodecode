@@ -2255,14 +2255,59 @@ PERSIST-SHARED-CONFIG will not write where a secret belongs.")
 
 ;;; The names that hold a REFERENCE to a secret -- bot_token_env, token_file
 ;;; -- end otherwise and read as they are. Data: a layer can widen it.
-(defparameter *secret-key-suffixes* '("api_key" "token" "secret" "password")
+(defparameter *secret-key-suffixes*
+  '("api_key" "token" "secret" "password" "passwd" "passphrase"
+    "access_key" "private_key" "authorization" "cookie")
   "Member names whose string values CONFIG-GET answers as *REDACTED-SECRET*
-rather than as the value: a config path that names a secret is read for its
+rather than as the value, matched with case, `_' and `-' set aside: api_key,
+apiKey and X-Api-Key alike, an AWS secret_access_key, a header's
+Authorization or Cookie. A config path that names a secret is read for its
 presence, never echoed into a transcript.")
 
 (defun secret-key-p (key)
-  (some (lambda (suffix) (alexandria:ends-with-subseq suffix key :test #'char-equal))
-        *secret-key-suffixes*))
+  (flet ((bare (name) (remove-if (lambda (char) (find char "_-")) name)))
+    (let ((name (bare key)))
+      (some (lambda (suffix) (alexandria:ends-with-subseq (bare suffix) name :test #'char-equal))
+            *secret-key-suffixes*))))
+
+(defun secret-path-p (keys &aux (name (find-if #'stringp keys)))
+  "Whether the leaf KEYS reach -- innermost first, a member under its name and
+an element under its index -- holds a secret: its own name is a secret's
+(SECRET-KEY-P), or for an element the name of the list it sits in, so a key
+list under api_key reads as secrets too. A name further up never counts: a
+provider's or a server's id is the operator's word (sub-cookie)."
+  (and name (secret-key-p name)))
+
+(defun redact-url-credentials (text &aux (scheme (search "://" text)))
+  "TEXT with what a URL in it carries as a credential read as
+*REDACTED-SECRET*: the user:password@ before its host, and the value of a
+query parameter named key or named as a secret (SECRET-KEY-P); text that is
+no URL as it is."
+  (if (null scheme)
+      text
+      (let* ((host (+ scheme 3))
+             (path (or (position-if (lambda (char) (find char "/?#")) text :start host)
+                       (length text)))
+             (at (position #\@ text :start host :end path :from-end t))
+             (query (position #\? text :start path))
+             (fragment (and query (position #\# text :start query))))
+        (flet ((parameter (pair &aux (is (position #\= pair)))
+                 (if (and is (let ((name (subseq pair 0 is)))
+                               (or (string-equal name "key") (secret-key-p name))))
+                     (concatenate 'string (subseq pair 0 (1+ is)) *redacted-secret*)
+                     pair)))
+          (concatenate 'string
+                       (subseq text 0 host)
+                       (if at *redacted-secret* "")
+                       (subseq text (or at host) (or query (length text)))
+                       (if query
+                           (format nil "?~{~a~^&~}"
+                                   (mapcar #'parameter
+                                           (uiop:split-string (subseq text (1+ query)
+                                                                      (or fragment (length text)))
+                                                              :separator "&")))
+                           "")
+                       (if fragment (subseq text fragment) ""))))))
 
 ;;; --- one walk over a JSON tree ---------------------------------------------
 ;;; Three readers take a JSON value apart the same way: the deep copy a caller
@@ -2322,18 +2367,23 @@ anything else replaces the member, and :REMOVE takes the member out)."
   ;; credential in it, replacing each with *REDACTED-SECRET*. The reader and
   ;; this refusal name the same constant, so they cannot drift apart.
   ;;
-  ;; The file mode is carried across the rename: this document holds
-  ;; providers.<id>.api_key and gateway.operator_token, and adopting a fresh
-  ;; temp file's mode would quietly widen an operator's 0600.
+  ;; The file is the operator's alone (:PRIVATE): this document holds
+  ;; providers.<id>.api_key and gateway.operator_token, so the write that
+  ;; creates it makes it 0600 and a file left readable by others is narrowed
+  ;; back to its owner.
   (let ((redacted
           ;; the dotted paths where VALUE would write *REDACTED-SECRET* over a secret
           (let ((found '()))
             (map-json-leaves
              value
              (lambda (leaf keys)
-               (when (and (stringp leaf) (stringp (first keys))
-                          (secret-key-p (first keys))
-                          (string= leaf *redacted-secret*))
+               ;; a secret's own sentinel, or a URL carrying it where
+               ;; (KEYS run innermost first, PATH reversed below)
+               ;; REDACT-URL-CREDENTIALS read a credential out
+               (when (and (stringp leaf)
+                          (if (secret-path-p keys)
+                              (string= leaf *redacted-secret*)
+                              (and (search "://" leaf) (search *redacted-secret* leaf))))
                  (push (format nil "~{~a~^.~}" (reverse keys)) found))
                leaf)
              (reverse path))
@@ -2342,7 +2392,7 @@ anything else replaces the member, and :REMOVE takes the member out)."
     ((null file) (values :disabled nil))
     (redacted
      (values :failed
-             (format nil "~{~a~^, ~} would be written as ~s, the string a ~
+             (format nil "~{~a~^, ~} would be written carrying ~s, the string a ~
                           secret reads as -- write only the members you mean ~
                           to change, or :remove to take one out"
                      redacted *redacted-secret*)))
@@ -2352,7 +2402,7 @@ anything else replaces the member, and :REMOVE takes the member out)."
          (bind ((existing (and (probe-file file) (uiop:read-file-string file)))
                 ((text added replaced removed) (nlk:set-jsonc-path (or existing "") path value)))
            (when (or added replaced removed)
-             (nlk:write-file-atomically file text :mode :keep)
+             (nlk:write-file-atomically file text :mode :private)
              ;; FILE-WRITE-DATE is second-granular and the memo keys on it
              ;; together with the size, so two writes inside one second at
              ;; equal length would otherwise read back stale.
@@ -2543,15 +2593,17 @@ takes the pin out. An ID no decider has is refused before anything moves.
         ((null path) '())
         (t (error "a config path is a list of member keys, not ~s" path))))
 
-(defun redact-secrets (value key)
-  "VALUE with every string member under a secret-named key replaced by
-*REDACTED-SECRET*, recursively; KEY is the name VALUE itself sits under."
+(defun redact-secrets (value key &aux (above (if (listp key) (reverse key) (list key))))
+  "VALUE with every string member that holds a secret (SECRET-PATH-P: its own
+name, or for a list's element the list's) replaced by *REDACTED-SECRET*, and
+what a URL carries as a credential read the same way (REDACT-URL-CREDENTIALS),
+recursively; KEY is the name VALUE itself sits under, or the names from the
+root that reach it."
   (map-json-leaves value
-                   (lambda (leaf keys &aux (name (or (first keys) key)))
-                     (if (and (stringp leaf) (plusp (length leaf))
-                              (stringp name) (secret-key-p name))
-                         *redacted-secret*
-                         leaf))))
+                   (lambda (leaf keys)
+                     (cond ((not (and (stringp leaf) (plusp (length leaf)))) leaf)
+                           ((secret-path-p (append keys above)) *redacted-secret*)
+                           (t (redact-url-credentials leaf))))))
 
 (defun config-get (&optional path)
   "The shared operator config (~/.nodecode/config.jsonc) at PATH -- a list
@@ -2569,7 +2621,7 @@ nothing is there."
     (when error-text
       (error "the shared config does not read: ~a" error-text))
     (let ((steps (config-path path)))
-      (nlk:json-plist (redact-secrets (apply #'json-value config :any steps) (car (last steps)))))))
+      (nlk:json-plist (redact-secrets (apply #'json-value config :any steps) steps)))))
 
 (defun config-set (path value)
   "Write VALUE into the shared operator config at PATH and answer the diff

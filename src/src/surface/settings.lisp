@@ -282,11 +282,11 @@ section's CHECK as {text}. A probe's refusal answers 400 in its own words."
 ;;; --- the document whole ------------------------------------------------------------
 
 (defun secret-spans (text)
-  "Each member of the JSONC document TEXT named as a secret is (SECRET-KEY-P)
-whose value is a string that is not empty, as (PATH START END) -- what
-CONFIG-GET reads as *REDACTED-SECRET*."
-  (remove-if-not (lambda (leaf &aux (key (car (last (first leaf)))))
-                   (and (stringp key) (secret-key-p key)
+  "Each string of the JSONC document TEXT that holds a secret (SECRET-PATH-P:
+its own name, or for a list's element the list's) and is not empty, as (PATH
+START END) -- what CONFIG-GET reads as *REDACTED-SECRET*."
+  (remove-if-not (lambda (leaf)
+                   (and (secret-path-p (reverse (first leaf)))
                         (> (- (third leaf) (second leaf)) 2)))
                  (nlk::jsonc-string-leaves text)))
 
@@ -349,7 +349,8 @@ reading *REDACTED-SECRET* given OLD's own value at the same path back:
                                               or take the member out"
                              path sentinel))))
                (push (list start end (subseq old (second was) (third was))) spans)))
-  (values (splice-spans text (nreverse spans)) (length spans)))
+  (let ((spans (nreverse spans)))
+    (values (splice-spans text spans) (length spans))))
 
 (defun save-config-text (text stamp &aux (file *shared-config-path*))
   "Write TEXT, the raw editor's document, as config.jsonc once the file
@@ -371,7 +372,7 @@ included. Answers the editor's read of what was written."
                                            (ignore-errors (config-refusals (config-document old)))
                                            :test #'string=))
           (nlk::protocol-refuse :invalid_config "nothing was saved: ~{~a~^; ~}" refused))
-        (nlk:write-file-atomically file text :mode :keep)
+        (nlk:write-file-atomically file text :mode :private)
         ;; The memo keys on size and mtime, second-granular.
         (setf *shared-config-memo* nil)
         (config-text-json text (format nil "config.jsonc saved~[~:;, ~:*~d secret~:p kept from the file~]"

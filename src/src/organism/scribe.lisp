@@ -608,9 +608,11 @@ text>`.")
 to the octet stream it is handed — to PATH through a temp claimed beside it and
 one rename, so a crash mid-write leaves the old file or none, never a torn one.
 PATH's directory is made first, unless PARENTS is NIL and a missing one is an
-error. MODE is the mode the file carries across the rename: an integer, or
+error. MODE is the mode the file carries across the rename: an integer,
 :KEEP for the mode PATH already has, since adopting a fresh temp file's mode
-would quietly widen an operator's 0600. DIRECTORY-MODE is the directory's mode."
+would quietly widen an operator's 0600, or :PRIVATE for a file that holds
+secrets: PATH's own owner bits and none for the group or others, 0600 when
+PATH is new. DIRECTORY-MODE is the directory's mode."
   ;; The temp is claimed exclusively (CLAIM-TEMP-BESIDE), so a name already
   ;; taken — by a file, or by a link waiting to be followed — is a retry, never
   ;; a write through it; whichever way the write ends, the temp is gone.
@@ -618,9 +620,11 @@ would quietly widen an operator's 0600. DIRECTORY-MODE is the directory's mode."
   ;; last `/' (PATH-PARENT).
   (let* ((native (if (stringp path) path (sb-ext:native-namestring path)))
          #+win32 (native (substitute #\/ #\\ native))
-         (bits (if (eq mode :keep)
-                   (ignore-errors (logand (sb-posix:stat-mode (sb-posix:stat native)) #o7777))
-                   mode))
+         (bits (case mode
+                 (:keep (ignore-errors (logand (sb-posix:stat-mode (sb-posix:stat native)) #o7777)))
+                 (:private (logand #o700 (or (ignore-errors (sb-posix:stat-mode (sb-posix:stat native)))
+                                             #o600)))
+                 (t mode)))
          (temp (flet ((claim ()
                         (claim-temp-beside
                          native (lambda (temp)

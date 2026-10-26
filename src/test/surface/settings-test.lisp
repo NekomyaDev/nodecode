@@ -170,6 +170,23 @@ name, a check -- and nl-settings.shut, whose probe refuses."
                       (refused (swap text "\"loud\"" "\"password\": \"[set]\", \"loud\""))) "a stray sentinel"))))
     (is (not (search "\"mode\"" (uiop:read-file-string config))) "nothing refused was written")))
 
+(deftest settings-raw-editor-masks-what-config-get-masks ()
+  ;; One rule names a secret for both readers (SECRET-PATH-P): an MCP
+  ;; server's Authorization header and a key list under api_key read as the
+  ;; sentinel in the raw editor too, and a save of the text as read puts each
+  ;; one back byte for byte.
+  (let* ((old "{\"mcp\": {\"servers\": {\"s\": {\"headers\": {\"Authorization\": \"Bearer FAKEHDR6\"}}}},
+ \"p\": {\"api_key\": [\"FAKEARR5\"], \"X-Api-Key\": \"FAKEX8\", \"sdk\": \"anthropic\"}}")
+         (masked (nle::splice-spans old (loop for (nil start end) in (nle::secret-spans old)
+                                              collect (list start end (nlk::json-string-literal
+                                                                       nle::*redacted-secret*))))))
+    (dolist (fake '("FAKEHDR6" "FAKEARR5" "FAKEX8"))
+      (is (not (search fake masked)) fake))
+    (is (search "\"sdk\": \"anthropic\"" masked) "what is no secret reads as itself")
+    (multiple-value-bind (text count) (nle::restore-secrets masked old)
+      (is (equal old text) "the text as read saves back as the file's own bytes")
+      (is (= 3 count)))))
+
 ;;; --- what the section's own reader refuses ---------------------------------------
 ;;; A section's reader is what its cell's start runs (NLK:SECTION-SETTINGS,
 ;;; the declared fields and then the owner's own reading). The write asks the

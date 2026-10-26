@@ -115,6 +115,21 @@ holding DEFINITION alone, and drop the index."
     (nlk:write-file-atomically path "all:")
     (is (equal "all:" (nlk:read-text path)) "Makefile, not Makefile.tmp")))
 
+(deftest scribe-atomic-write-keeps-a-private-file-the-owners-alone (with-scribe-fixture)
+  ;; :PRIVATE is the mode of a file that holds secrets (config.jsonc): 0600
+  ;; when the write creates it, narrowed to its owner's bits when another
+  ;; writer left it readable by the group or by others.
+  (let ((path (merge-pathnames "secrets.jsonc" *scribe-dir*)))
+    (flet ((mode () (logand #o777 (sb-posix:stat-mode (sb-posix:stat (namestring path))))))
+      (nlk:write-file-atomically path "{}" :mode :private)
+      (is (= #o600 (mode)) "created 0600")
+      (sb-posix:chmod (namestring path) #o644)
+      (nlk:write-file-atomically path "{}" :mode :private)
+      (is (= #o600 (mode)) "0644 narrowed to 0600")
+      (sb-posix:chmod (namestring path) #o400)
+      (nlk:write-file-atomically path "{}" :mode :private)
+      (is (= #o400 (mode)) "an owner's own narrower bits kept"))))
+
 ;;; --- the eval seam writes the layer ------------------------------------------
 
 (deftest scribe-records-a-defun-as-one-committed-layer-file (with-scribe-fixture)

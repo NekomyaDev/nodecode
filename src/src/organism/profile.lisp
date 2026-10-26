@@ -308,7 +308,7 @@ into HOME, and answer the member's name when there was one to take out."
     (bind (((new-text _ _ removed)
             (ignore-errors (set-jsonc-path text '("channels") :remove))))
       (when removed
-        (write-file-atomically path new-text)
+        (write-file-atomically path new-text :mode :private)
         (first removed)))))
 
 (defun git-clone (from to &key depth)
