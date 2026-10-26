@@ -10203,8 +10203,9 @@ refused install says why over the list, and nothing else moved."
   "The page TEXT, what a folder's sign-in command answered, sends the
 operator to, and the device code it asks for there when it names one: =>
 (values URL CODE), either NIL."
-  ;; The code is the word after `code' that reads as one -- digits or a dash
-  ;; in it: `enter the code ABCD-1234', never `send /openai-codex code ADDRESS'.
+  ;; The code is the word after `code' that reads as one -- a digit in it, or
+  ;; capitals around a dash: `enter the code ABCD-1234' or `NFGT-NHBJ', never
+  ;; `send /openai-codex code ADDRESS' nor `Kimi Code sign-in'.
   (let ((words (loop with start = nil
                      for i from 0 to (length text)
                      for blank = (or (= i (length text))
@@ -10226,7 +10227,8 @@ operator to, and the device code it asks for there when it names one: =>
                   when (and code (string-equal (string-trim ":" word) "code")
                             (<= 4 (length code) 16)
                             (every (lambda (c) (or (alphanumericp c) (char= c #\-))) code)
-                            (some (lambda (c) (or (digit-char-p c) (char= c #\-))) code))
+                            (or (some #'digit-char-p code)
+                                (and (find #\- code) (notany #'lower-case-p code))))
                     return code))))
 
 (defun sign-in-page-label (url &aux (from (+ 3 (or (search "://" url) -3))))

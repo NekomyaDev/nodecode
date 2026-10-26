@@ -199,6 +199,19 @@
           (is (= 0 installs) "nothing installed again")
           (is (eq :api-key (nle::connect-dialog-step dialog)) "straight to its key"))))))
 
+(deftest sign-in-facts-read-the-page-and-the-device-code ()
+  ;; What the sign-in panel shows of a folder's answer: its first page that
+  ;; is not the loopback the browser comes back to, and the device code --
+  ;; never a word that only follows `code' (a product called Kimi Code).
+  (flet ((facts (text) (multiple-value-list (nle::sign-in-facts text))))
+    (is (equal '("https://www.kimi.com/code/authorize_device?user_code=NFGT-NHBJ" "NFGT-NHBJ")
+               (facts "Kimi Code sign-in: open https://www.kimi.com/code/authorize_device?user_code=NFGT-NHBJ and enter the code NFGT-NHBJ.")))
+    (is (equal '("https://github.com/login/device" "FFC7-AECC")
+               (facts "Open https://github.com/login/device and enter the code FFC7-AECC to sign in.")))
+    (is (equal '("https://auth.example.test/a?x=1" nil)
+               (facts "Open: https://auth.example.test/a?x=1 then return to http://localhost:1455/cb, or send /nl code ADDRESS.")))
+    (is (equal '(nil nil) (facts "port 1455 is in use; only http://localhost:1455/auth/callback is allowed")))))
+
 (deftest connect-a-sign-in-that-names-no-page-says-why-over-the-list ()
   ;; A command that answers no page to sign in at -- a refusal naming only
   ;; the loopback address its browser would come back to -- waits for
