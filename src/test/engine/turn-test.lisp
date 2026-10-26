@@ -2472,6 +2472,38 @@ lane function, so nothing dials."
         (when facts
           (is (equal "refused" (nlk:provider-fallback-event-reason (first facts)))))))))
 
+(deftest a-candidate-after-a-streamed-refusal-times-its-own-first-token
+    (with-session-store ("refusal-ttft"))
+  ;; The selection streams, then refuses; the candidate waits before its first
+  ;; token. The candidate's request fact is timed from its own request: a
+  ;; cadence carried over from the refused attempt kept that attempt's first
+  ;; token, and the wait came out negative (the qa collector refused the page).
+  (with-durable-turn (turn "refusal-ttft" :command-id "refusal-ttft-cmd" :input "go" :current t :retry-delay 0)
+    (with-stubbed-fdefinitions
+        ((nle::failover-chain () '((:provider "alt" :model "alt-model")))
+         (nle::failover-candidate-config (provider model)
+           (stub-effective-provider-config provider model))
+         (nle::call-provider-streaming (context &key on-part)
+           (cond ((equal "alt-model" (nle::effective-provider-config-model context.provider-config))
+                  (sleep 0.05)
+                  (nle::emit-stream-part on-part :text-delta :text "answered")
+                  ;; The request's octets, as a lane returns them: without
+                  ;; them no request fact is recorded.
+                  (values (wire-message "assistant" :content "answered") nil "stop"
+                          (sb-ext:string-to-octets "{\"model\":\"alt-model\",\"messages\":[]}")))
+                 (t
+                  (nle::emit-stream-part on-part :reasoning-delta :text "thinking")
+                  (sleep 0.2)
+                  (error 'nle::provider-refused
+                         :detail "the provider refused to answer (finish reason refusal)")))))
+      (nle::call-provider (user-context))))
+  (let ((fact (find-if (lambda (event) (typep event 'nlk:provider-request-event))
+                       (nle::collect-session-events "refusal-ttft"))))
+    (is-present (fact fact) "the candidate's request fact"
+      (is (equal "alt-model" (nlk:provider-request-event-model fact)))
+      (is (<= 50 (nlk:provider-request-event-ttft-ms fact) 190) "timed from the candidate's request, never from the refused attempt's first token")
+      (is (= 1 (nlk:provider-request-event-stream-part-count fact)) "the candidate's parts alone"))))
+
 (deftest failover-triggers-read-the-shared-config ()
   (with-temp-file (path :contents "{\"failover\": {\"on\": [\"refusal\", \"bogus\", \"rate_limit\"]}}")
     (let ((nle::*shared-config-path* path))

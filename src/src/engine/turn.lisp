@@ -2656,6 +2656,11 @@ separate turn.usage fact owns here. The round index rides *PROVIDER-ROUND*."
                            ;; scratch, never as another model's continuation.
                            (seal-streamed-attempt (provider-error-detail e) "rerun")
                            (setf sealed-reasoning "" sealed-text "")
+                           ;; The candidate's attempt is timed from its own
+                           ;; request: a cadence carried over kept the
+                           ;; refused attempt's first token, and the
+                           ;; candidate's TTFT came out negative.
+                           (void-partial-stream)
                            (when *current-durable-turn*
                              (nlk:record-provider-fallback
                               *current-durable-turn*
