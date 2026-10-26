@@ -406,36 +406,28 @@ the pick is known."
                 (hover-seg model (format nil "● ~a" (getf check :label)) target
                            (if (eq :private (getf check :level)) :success :connection)))))))
 
-;;; The box stacks the checklist as pills, one a fact a line and no blank line between them: the
-;;; mark, what it checks and its value, a divider between each, the labels padded to one width so
-;;; the dividers and values line up down the stack.
+;;; The box stacks the checklist as pills, one a fact a line, a blank line between each.
 
-(defun connection-pill (fact label-width room)
-  "FACT, a checklist row (MARK LABEL VALUE), as one pill no wider than ROOM on the toast ground:
-the mark, what it checks padded to LABEL-WIDTH, its value, a divider between each."
+(defun connection-pill (fact room)
+  "FACT, a checklist row (MARK LABEL VALUE), as one pill no wider than ROOM: the mark, what it
+checks and its value on the toast ground, a column of pad each side."
   (destructuring-bind (mark label value) fact
-    (flet ((divider () (make-seg :text " │ " :tone :muted)))
-      (let ((left (list (make-seg :text (case mark (:ok "✓") (:no "✗") (t "?")) :bold t
-                                  :tone (case mark (:ok :success) (:no :danger) (t :tool)))
-                        (divider)
-                        (make-seg :text label :tone :foreground :bold t)
-                        (make-seg :text (make-string (max 0 (- label-width (text-display-width label)))
-                                                     :initial-element #\Space))
-                        (divider)
-                        (make-seg :text value :tone :muted))))
-        (account-slab-line (list left nil) (min room (+ 2 (segs-display-width left))) :toast :pad 1)))))
+    (let ((left (list (make-seg :text (case mark (:ok "✓") (:no "✗") (t "?")) :bold t
+                                :tone (case mark (:ok :success) (:no :danger) (t :tool)))
+                      (make-seg :text (format nil " ~a " label) :tone :foreground :bold t)
+                      (make-seg :text value :tone :muted))))
+      (account-slab-line (list left nil) (min room (+ 2 (segs-display-width left))) :toast :pad 1))))
 
 (defun connection-dialog-rows (key check &optional (room 96))
-  "The box: the pick KEY names and its verdict, then CHECK's facts as pills stacked one to a line,
-no wider than ROOM columns, then where the terms come from."
+  "The box: the pick KEY names and its verdict, then CHECK's facts as pills stacked one to a line
+with a blank line between each, no wider than ROOM columns, then where the terms come from."
   (when (consp check)
     (let* ((room (max 8 (- room 4)))
            (facts (remove nil (getf check :rows) :key #'first))
-           (label-width (reduce #'max facts :key (lambda (fact) (text-display-width (second fact))) :initial-value 0))
            (source (find nil (getf check :rows) :key #'first))
            (indent (make-seg :text "    " :tone :muted)))
       (flet ((pill-row (fact)
-               (let ((pill (connection-pill fact label-width room))
+               (let ((pill (connection-pill fact room))
                      (row (make-picker-row :heading t :value (list :connection))))
                  (setf (picker-row-label row) (string-trim " " (format nil "~{~a~}" (mapcar #'seg-text pill)))
                        (picker-row-paint row) (lambda (selected room)
@@ -449,7 +441,9 @@ no wider than ROOM columns, then where the terms come from."
                (make-picker-row :heading t :label (getf check :label) :mark "●" :value (list :connection)
                                 :mark-tone (if (eq :private (getf check :level)) :success :connection))
                (blank))
-         (mapcar #'pill-row facts)
+         (loop for (fact . more) on facts
+               collect (pill-row fact)
+               when more collect (blank))
          (when source
            (list (blank)
                  (make-picker-row :heading t :value (list :connection) :mark " "
