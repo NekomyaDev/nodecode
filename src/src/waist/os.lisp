@@ -550,7 +550,12 @@ says: :STREAM, a pipe of its own; :OUTPUT, joined to stdout; a namestring.
                                                actions-sap attributes-sap
                                                argv-sap envp-sap)))
                       (unless (zerop code)
-                        (error "spawning ~a: ~a" (first argv) (sb-int:strerror code)))
+                        ;; A file action can be what failed -- a chdir into a
+                        ;; directory that is gone returns ENOENT -- so name
+                        ;; it, or a missing working directory reads as a
+                        ;; missing program.
+                        (error "spawning ~a~@[ in ~a~]: ~a" (first argv) directory
+                               (sb-int:strerror code)))
                       (setf pid child))))))))
         (dolist (descriptor (list out-write err-write in-read))
           (when descriptor (sb-posix:close descriptor)))
