@@ -9384,7 +9384,8 @@ query began."
                                            (if lead
                                                (ceiling (length (getf (picker-pictures dialog) :rows)) 2)
                                                0)))
-                             (if (or whole (eq (picker-dialog-kind dialog) :status))
+                             ;; /status and the privacy box are read whole, never scrolled.
+                             (if (or whole (member (picker-dialog-kind dialog) '(:status :privacy)))
                                  reach *dialog-frame-max-height*))))))
       ;; Under 5 rows no panel: Zig's header-only strip has no shape in this shell.
       (when (>= panel 5)

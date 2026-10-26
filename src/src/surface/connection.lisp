@@ -406,25 +406,82 @@ the pick is known."
                 (hover-seg model (format nil "● ~a" (getf check :label)) target
                            (if (eq :private (getf check :level)) :success :connection)))))))
 
-(defun connection-dialog-rows (key check)
-  "The box: the pick KEY names, its verdict, then CHECK's checklist."
+;;; The box lays the checklist as cubes, one a fact: side by side while the panel has room, the
+;;; next row of cubes under them when it does not.
+
+(defparameter *connection-cube-gap* 2 "Columns between two cubes side by side.")
+
+(defun connection-cube-lines (cube)
+  "CUBE, a checklist row (MARK LABEL VALUE), as its slab lines (LEFT RIGHT): a pad, the mark and
+what it checks, the value, a pad."
+  (destructuring-bind (mark label value) cube
+    (list (list nil nil)
+          (list (list (make-seg :text (case mark (:ok "✓") (:no "✗") (t "?")) :bold t
+                                :tone (case mark (:ok :success) (:no :danger) (t :tool)))
+                      (make-seg :text (format nil " ~a" label) :tone :foreground :bold t))
+                nil)
+          (list (list (make-seg :text value :tone :muted)) nil)
+          (list nil nil))))
+
+(defun connection-cube-width (cubes)
+  "One width for every cube: the widest fact with the slab's pads, 18 to 30 columns."
+  (min 30 (max 18 (+ 4 (loop for (nil label value) in cubes
+                             maximize (max (+ 2 (text-display-width label)) (text-display-width value)))))))
+
+(defun connection-dialog-rows (key check &optional (room 96))
+  "The box: the pick KEY names and its verdict, then CHECK's facts as cubes, as many across as ROOM
+columns hold and the rest in rows under them, then where the terms come from."
   (when (consp check)
-    (list* (make-picker-row :heading t :label (format nil "~@[~a · ~]~a" (cdr key) (getf check :name))
-                            :mark "■" :mark-tone :accent)
-           (make-picker-row :heading t :label (getf check :label) :mark "●"
-                            :mark-tone (if (eq :private (getf check :level)) :success :connection))
-           (loop for (mark label value) in (getf check :rows)
-                 collect (make-picker-row :heading t :label (format nil "~13a ~a" label value)
-                                          :mark (case mark (:ok "✓") (:no "✗") (:claim "?") (t " "))
-                                          :mark-tone (case mark (:ok :success) (:no :danger) (:claim :tool)
-                                                       (t :muted)))))))
+    (let* ((cubes (remove nil (getf check :rows) :key #'first))
+           (source (find nil (getf check :rows) :key #'first))
+           (width (connection-cube-width cubes))
+           (gap *connection-cube-gap*)
+           (most (max 1 (min (length cubes) (floor (+ (- room 4) gap) (+ width gap)))))
+           ;; As many rows as the room needs, the cubes shared evenly across them.
+           (across (ceiling (length cubes) (ceiling (length cubes) most)))
+           (indent (make-seg :text "    " :tone :muted)))
+      (flet ((line-row (group line)
+               (let ((lines (mapcar (lambda (cube) (nth line (connection-cube-lines cube))) group))
+                     (row (make-picker-row :heading t :value (list :connection))))
+                 (setf (picker-row-label row)
+                       (string-right-trim " " (format nil "~{~a~^  ~}"
+                                                     (mapcar (lambda (slab)
+                                                               (format nil "~{~a~}" (mapcar #'seg-text (first slab))))
+                                                             lines)))
+                       (picker-row-paint row)
+                       (lambda (selected room)
+                         (declare (ignore selected room))
+                         (values (cons indent
+                                       (loop for (slab . more) on lines
+                                             append (account-slab-line slab width :toast)
+                                             when more collect (make-seg :text (make-string gap :initial-element #\Space)
+                                                                         :tone :muted)))
+                                 nil)))
+                 row))
+             (blank () (make-picker-row :heading t :label "" :value (list :connection))))
+        (append
+         (list (make-picker-row :heading t :label (format nil "~@[~a · ~]~a" (cdr key) (getf check :name))
+                                :mark "■" :mark-tone :accent :value (list :connection))
+               (make-picker-row :heading t :label (getf check :label) :mark "●" :value (list :connection)
+                                :mark-tone (if (eq :private (getf check :level)) :success :connection))
+               (blank))
+         (loop for start from 0 below (length cubes) by across
+               for group = (subseq cubes start (min (length cubes) (+ start across)))
+               unless (zerop start) collect (blank)
+               append (loop for line from 0 below 4 collect (line-row group line)))
+         (when source
+           (list (make-picker-row :heading t :value (list :connection) :mark " "
+                                  :label (format nil "~a ~a" (second source) (third source))))))))))
 
 (defun slash-privacy-op (model)
   "Open the box the footer's knob opens: what the check measured for this pick and what the
 provider's terms say."
   (let* ((key (connection-key model))
          (check (and key (gethash key *connection-checks*))))
-    (open-picker-dialog model "Connection" (connection-dialog-rows key check) (constantly nil)
+    (open-picker-dialog model "Connection"
+                        (connection-dialog-rows key check
+                                                (- (docked-panel-room (chat-model-term-width model) t) 2))
+                        (constantly nil)
                         :kind :privacy
                         :empty-label (if (eq check :checking) "Checking connection…" "No model chosen yet")
                         :hint "esc close")

@@ -84,7 +84,21 @@
         (is (equal "privacy" (nle::picker-dialog-command :privacy)) "a second click on the knob closes it")
         (is (equal "anthropic/claude-opus-5-5 · Anthropic" (first labels)))
         (is (equal "Connection secure · Not private" (second labels)))
-        (is (find "Trained on    no" labels :test #'equal))))))
+        (is (some (lambda (label) (and (search "✓ Encrypted" label) (search "✓ Intercepted" label))) labels) "the facts as cubes side by side")
+        (is (> (nle::docked-dialog-frame-rows model) nle::*dialog-frame-max-height*) "the box is read whole, never scrolled")))))
+
+(deftest connection-cubes-stack-when-the-row-runs-out ()
+  ;; Asked 2026-10-26: "make it into cubes stacked horizontally and vertically if it spans more".
+  (let ((check (nle::connection-verdict "anthropic" (list* :host "api.anthropic.com" :cloudflare t +connection-tls+)))
+        (key '("anthropic" . "anthropic/claude-opus-5-5")))
+    (flet ((grid (room) (remove-if (lambda (row) (member (nle::picker-row-mark row) '("■" "●" " ") :test #'equal))
+                                   (nle::connection-dialog-rows key check room)))
+           (cube-lines (rows) (count-if (lambda (row) (nle::picker-row-paint row)) rows)))
+      (let ((wide (grid 240)) (narrow (grid 120)) (one (grid 20)))
+        (is (= 4 (cube-lines wide)) "eight cubes in one row of four lines")
+        (is (= 8 (cube-lines narrow)) "four to a row: two rows of cubes, eight lines")
+        (is (= 32 (cube-lines one)) "one to a row when nothing more fits")
+        (is (search "✗ Readable by" (nle::picker-row-label (second (remove-if-not #'nle::picker-row-paint wide)))))))))
 
 (deftest connection-knob-leads-the-footers-right-lane (with-temp-store ())
   (let ((nle::*connection-checks* (make-hash-table :test #'equal))
