@@ -3123,14 +3123,27 @@ line of its answer. NIL for a call that forked nothing."
   (when-let (forks (and (hash-table-p row.metadata) (json-value row.metadata :array "forks")))
     (let* ((last (1- (length forks)))
            (names (map 'list (lambda (fork) (or (json-value fork :text "label") "")) forks))
-           (room (min 24 (reduce #'max names :key #'text-display-width :initial-value 0))))
+           (room (min 24 (reduce #'max names :key #'text-display-width :initial-value 0)))
+           ;; Each fork's calls, time and -- for one that did not complete --
+           ;; how it ended: one cell, as wide as the widest, so every note
+           ;; starts in one column (`1 call' and `12 calls' moved it).
+           (stats (map 'list (lambda (fork &aux (status (json-value fork :string "status"))
+                                                 (ms (json-value fork :integer "ms")))
+                               (cons (format nil "  ~2d call~:p~@[ · ~a~]" (or (json-value fork :integer "calls") 0)
+                                             (and ms (format-turn-elapsed ms)))
+                                     (unless (member status '("running" "completed") :test #'equal)
+                                       (format nil " · ~a" status))))
+                       forks))
+           (stat-room (reduce #'max stats :key (lambda (cell) (+ (text-display-width (car cell))
+                                                                 (text-display-width (or (cdr cell) ""))))
+                                          :initial-value 0)))
       (loop for fork across forks
             for name in names
+            for (counts . ending) in stats
             for index from 0
             collect (let* ((status (json-value fork :string "status"))
                            (running (equal status "running"))
                            (done (equal status "completed"))
-                           (ms (json-value fork :integer "ms"))
                            (words (json-value fork :text (if running "note" "answer")))
                            (shown (clip-text-to-width name room))
                            (line (make-lline :text (make-string indent :initial-element #\Space)
@@ -3143,13 +3156,15 @@ line of its answer. NIL for a call that forked nothing."
                                                           (make-string (max 0 (- room (text-display-width shown)))
                                                                        :initial-element #\Space))
                                         :tone :foreground)
-                      (append-lline-run line (format nil "  ~2d call~:p~@[ · ~a~]" (or (json-value fork :integer "calls") 0)
-                                                     (and ms (format-turn-elapsed ms)))
-                                        :tone :muted)
-                      (unless (or running done)
-                        (append-lline-run line (format nil " · ~a" status) :tone :danger))
+                      (append-lline-run line counts :tone :muted)
+                      (when ending
+                        (append-lline-run line ending :tone :danger))
                       (when words
-                        (append-lline-run line (format nil "  ~a" (nlk:one-line words))
+                        (append-lline-run line (concatenate 'string
+                                                            (make-string (max 0 (- stat-room (text-display-width counts)
+                                                                                   (text-display-width (or ending ""))))
+                                                                         :initial-element #\Space)
+                                                            "  " (nlk:one-line words))
                                           :tone (if running :muted :foreground) :italic running))
                       (clip-lline line width))))))
 
@@ -4904,8 +4919,10 @@ the state's live execs, shows what it has written under it."
                                          ;; card held, two columns in under it, the
                                          ;; card's title aside.
                                          (append
-                                          ;; A call that forked lists its forks under it.
-                                          (mapcar #'stepped-in (fork-tree-llines member (- width 2)))
+                                          ;; A call that forked lists its forks under it,
+                                          ;; the rail under the call's first word: stepped
+                                          ;; in, it stood two columns right of everything.
+                                          (fork-tree-llines member width)
                                           (when (run-member-open-p member)
                                             (mapcar #'stepped-in (without-note member (rest (row-body-llines member width)))))
                                           (listed-output member width backgrounds))))
