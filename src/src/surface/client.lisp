@@ -5027,7 +5027,7 @@ the list on both shells)."
       ;; alone reached a lane that cannot talk to it (OpenCode Go answers 400
       ;; MissingSessionID) -- and one models.dev lacks (ChatGPT's Codex) is
       ;; listed by the name its folder gives it. The row says nothing of the
-      ;; install: picking it is the whole of it (peasantry1833: "Less is more").
+      ;; install: picking it is the whole of it ("less is more").
       (dolist (offer (picker-provider-offers))
         (let* ((id (getf offer :provider))
                (held (find-if (lambda (row)
