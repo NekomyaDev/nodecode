@@ -76,7 +76,9 @@ gh api "repos/$github_repo" --jq .full_name > /dev/null || {
   echo "publish: GitHub does not answer for $github_repo (gh auth status), so $tag could not be listed. Nothing moves." >&2
   exit 1
 }
-tagged="$(gh api "repos/$github_repo/commits/$tag" --jq .sha 2> /dev/null || true)"
+# A miss is a nonzero exit, and gh prints GitHub's error body on stdout with
+# it, so only an answer that succeeded names a commit.
+tagged="$(gh api "repos/$github_repo/commits/$tag" --jq .sha 2> /dev/null)" || tagged=""
 if [ -n "$tagged" ] && [ "$tagged" != "$commit" ]; then
   echo "publish: $tag is already released at ${tagged:0:9}; bump :version in src/nodecode.asd for $label. Nothing moves." >&2
   exit 1

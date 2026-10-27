@@ -61,7 +61,9 @@ notes() { while [ $# -gt 0 ]; do [ "$1" = --notes-file ] && cp "$2" "$state/note
 case "$1 ${2:-}" in
   'api repos/test/nodecode') printf '%s\n' test/nodecode ;;
   'api repos/test/nodecode/commits/'*)
-    [ -n "${PUBLISH_TEST_TAGGED:-}" ] || exit 1
+    # As GitHub answers a tag it does not have: the error body on stdout, and
+    # a nonzero exit.
+    [ -n "${PUBLISH_TEST_TAGGED:-}" ] || { printf '%s\n' '{"message":"No commit found for SHA: v9.9.9","status":"422"}'; exit 1; }
     printf '%s\n' "$PUBLISH_TEST_TAGGED" ;;
   'release list') printf '%s\n' v9.9.8 ;;
   'release view')
