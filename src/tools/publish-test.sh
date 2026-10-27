@@ -46,11 +46,35 @@ fi
 EOF
 
 # No CI: every arm the publisher needs is packed on this host or in the
-# sandbox it drives, so nothing in that path may reach for a runner.
+# sandbox it drives, so gh is for the releases page alone: the repository, a
+# tag's commit, the release list, and one release made or updated. Anything
+# else (a workflow, a run) is a reach for a runner. Every call is recorded,
+# and the release lives in PUBLISH_TEST_GH_STATE across publishes.
 cat > "$fake_bin/gh" <<'EOF'
 #!/bin/sh
-printf '%s\n' "gh: the publish path called CI: $*" >&2
-exit 1
+set -eu
+printf '%s\n' "$*" >> "$PUBLISH_TEST_GH"
+state="$PUBLISH_TEST_GH_STATE"
+mkdir -p "$state"
+assets() { n=0; for a in "$@"; do case "$a" in */nodecode-*) n=$((n + 1)) ;; esac; done; echo "$n"; }
+notes() { while [ $# -gt 0 ]; do [ "$1" = --notes-file ] && cp "$2" "$state/notes"; shift; done; }
+case "$1 ${2:-}" in
+  'api repos/test/nodecode') printf '%s\n' test/nodecode ;;
+  'api repos/test/nodecode/commits/'*)
+    [ -n "${PUBLISH_TEST_TAGGED:-}" ] || exit 1
+    printf '%s\n' "$PUBLISH_TEST_TAGGED" ;;
+  'release list') printf '%s\n' v9.9.8 ;;
+  'release view')
+    [ -f "$state/assets" ] || exit 1
+    case "$*" in
+      *assets*) cat "$state/assets" ;;
+      *url*) printf '%s\n' "https://github.invalid/test/nodecode/releases/tag/$3" ;;
+    esac ;;
+  'release create') assets "$@" > "$state/assets"; notes "$@" ;;
+  'release upload') assets "$@" > "$state/assets" ;;
+  'release edit') notes "$@" ;;
+  *) printf '%s\n' "gh: the publish path called CI: $*" >&2; exit 1 ;;
+esac
 EOF
 
 cat > "$fake_bin/scp" <<'EOF'
@@ -137,6 +161,8 @@ if [ "${1:-}" = -C ]; then
 fi
 case "${1:-}" in
   rev-parse) printf '%s\n' "$PUBLISH_TEST_LABEL" ;;
+  # The system definition at the commit declares the version the release is.
+  show) printf '%s\n' '(defsystem "nodecode"' '  :version "9.9.9"' ;;
   # A push lands the clone's installers on the site's remote, as GitHub would.
   push) printf '%s\n' "$*" >> "$PUBLISH_TEST_PUSHES"
         if [ -d "$dir/web/public" ]; then cp "$dir"/web/public/install.* "$PUBLISH_TEST_SITE/web/public/"; fi ;;
@@ -188,6 +214,9 @@ publish() {
   PUBLISH_TEST_SCP="$root/$2-scp" \
   PUBLISH_TEST_SLEEPS="$root/$2-sleeps" \
   PUBLISH_TEST_SITE="$sandbox/site-remote" \
+  PUBLISH_TEST_GH="$root/$2-gh" \
+  PUBLISH_TEST_GH_STATE="$root/gh-state" \
+  NODECODE_PUBLISH_GITHUB_REPO=test/nodecode \
   PUBLISH_TEST_INSTALLER="$sandbox/src/tools/install.sh" \
   PUBLISH_TEST_PS1="$sandbox/src/tools/install.ps1" \
   NODECODE_PUBLISH_INSTALLER_PATH="$sandbox/src/tools/install.sh" \
@@ -229,7 +258,7 @@ grep -qx 'nodecode-latest999-arm64-darwin.tar.gz.sha256' "$root/full-scp" || fai
 if grep -q SKIP_MACOS "$root/full-errors"; then
   fail 'a full publish says it skipped the Mac'
 fi
-# No CI: no runner branch is pushed, and the gh in PATH was never reached.
+# No CI: no runner branch is pushed, and gh only ever touched the releases page.
 # The one push is the installers' mirror, to the branch the site builds its
 # image from: a copy only in the container is reverted by the next image.
 grep -qx 'push -q origin HEAD:main' "$root/full-pushes" || fail 'the installers were never pushed to the site main'
@@ -261,6 +290,23 @@ fi
 [ -f "$root/flaky-502" ] || fail 'the 502 retry path was not exercised'
 printf '%s\n' 'publish-test: one label on every platform, pointers last, 502 retry, edge hash verification pass'
 
+# The release is a version on GitHub's releases page: the asd's base, tagged at
+# the commit, made after every pointer and installer is proved, with the notes
+# since the release before and all eight archives and sidecars.
+grep -q 'latest999 is nodecode 9.9.9, tagged v9.9.9' "$root/full-output" || fail 'the publish did not name its version'
+grep -q '^release create v9.9.9 -R test/nodecode --target latest999 --title nodecode 9.9.9 ' "$root/full-gh" \
+  || fail "no release v9.9.9 at the commit: $(tr '\n' ' ' < "$root/full-gh")"
+[ "$(cat "$root/gh-state/assets")" = 8 ] || fail "the release carries $(cat "$root/gh-state/assets") assets, not 8"
+grep -q 'v9.9.9 is on the releases page with 8 assets' "$root/full-output" || fail 'the release page was not read back'
+! grep -vE '^(api|release) ' "$root/full-gh" > /dev/null || fail "gh was asked for more than the releases page: $(tr '\n' ' ' < "$root/full-gh")"
+last_pointer_said="$(grep -n 'install.ps1 is live at' "$root/full-output" | cut -d: -f1)"
+release_said="$(grep -n 'is on the releases page' "$root/full-output" | cut -d: -f1)"
+[ "$last_pointer_said" -lt "$release_said" ] || fail 'the release page was made before the installers were proved'
+grep -qx '## Changes since v9.9.8' "$root/gh-state/notes" || fail "the notes do not start from the release before: $(cat "$root/gh-state/notes")"
+grep -qx -- '- channels: a card (aaaaaaaaa)' "$root/gh-state/notes" || fail 'the notes do not carry the commit heads'
+grep -q 'prints 9.9.9+latest999' "$root/gh-state/notes" || fail 'the notes do not name the version the build prints'
+printf '%s\n' 'publish-test: the release is v9.9.9 on the releases page, after the pointers, with its notes and every archive'
+
 # --- an archive already built is the release ----------------------------------
 # A second publish of the same commit ships what OUT holds: no arm packs again
 # and no sandbox boots, so no second body goes out under a name the edge
@@ -268,7 +314,21 @@ printf '%s\n' 'publish-test: one label on every platform, pointers last, 502 ret
 PUBLISH_TEST_NO_BUILD=1 publish dist again || { cat "$root/again-errors" >&2; fail 'the republish failed'; }
 [ ! -s "$root/again-pushes" ] || fail 'the republish pushed the installers again, though the site already carried them'
 grep -q 'stable-x86_64-windows points at latest999' "$root/again-output" || fail 'the republish moved no pointer'
-printf '%s\n' 'publish-test: a republish ships the archives already built'
+grep -q '^release upload v9.9.9 -R test/nodecode --clobber ' "$root/again-gh" || fail 'the republish did not update its own release'
+! grep -q '^release create' "$root/again-gh" || fail 'the republish made a second release'
+printf '%s\n' 'publish-test: a republish ships the archives already built and updates its own release'
+
+# --- a version already released elsewhere moves nothing ----------------------
+# A version is released once: when its tag names another commit, the publish
+# stops before any arm packs, and says to bump the asd.
+if PUBLISH_TEST_TAGGED=ccccccccc3333333333333333333333333333333 publish fresh-tagged tagged; then
+  fail 'a version tagged at another commit still published'
+fi
+grep -q 'v9.9.9 is already released at ccccccccc; bump :version in src/nodecode.asd' "$root/tagged-errors" \
+  || fail "the released version was not named: $(cat "$root/tagged-errors")"
+[ ! -s "$root/tagged-scp" ] || fail "a released version still shipped: $(tr '\n' ' ' < "$root/tagged-scp")"
+[ ! -e "$sandbox/fresh-tagged/nodecode-latest999-x86_64-linux.tar.gz" ] || fail 'an arm packed a version already released'
+printf '%s\n' 'publish-test: a version already released at another commit packs nothing'
 
 # --- an installer the edge never converges on gives up ------------------------
 # The installer's retries are counted apart from each read's own: a shared

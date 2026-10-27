@@ -62,6 +62,26 @@ env_file="$(publish_setting NODECODE_PUBLISH_ENV_FILE)" || exit 1
 base_url="${NODECODE_PUBLISH_BASE_URL:-https://nodecode.ai}"
 base_url="${base_url%/}"
 marketplace="$(publish_setting NODECODE_PUBLISH_MARKETPLACE_DIR)" || exit 1
+
+# Every release is a version on GitHub's releases page: the base that
+# src/nodecode.asd declares at the commit, tagged v<base> at that commit, with
+# its notes and archives (the block at the end). A version is released once, so
+# a version already tagged at another commit stops the publish here, before any
+# arm packs: bump :version in src/nodecode.asd first.
+github_repo="$(publish_setting NODECODE_PUBLISH_GITHUB_REPO)" || exit 1
+version="$(git show "$commit:src/nodecode.asd" | sed -n 's/^ *:version "\([0-9][0-9A-Za-z.-]*\)".*/\1/p' | head -n 1)"
+[ -n "$version" ] || { echo "publish: src/nodecode.asd at $label declares no :version" >&2; exit 1; }
+tag="v$version"
+gh api "repos/$github_repo" --jq .full_name > /dev/null || {
+  echo "publish: GitHub does not answer for $github_repo (gh auth status), so $tag could not be listed. Nothing moves." >&2
+  exit 1
+}
+tagged="$(gh api "repos/$github_repo/commits/$tag" --jq .sha 2> /dev/null || true)"
+if [ -n "$tagged" ] && [ "$tagged" != "$commit" ]; then
+  echo "publish: $tag is already released at ${tagged:0:9}; bump :version in src/nodecode.asd for $label. Nothing moves." >&2
+  exit 1
+fi
+echo "publish: $label is nodecode $version, tagged $tag"
 authority_installer="${NODECODE_PUBLISH_INSTALLER_PATH:-$repo/src/tools/install.sh}"
 # The Windows arm is served beside the shell one and reads the same pointer,
 # so it follows the same authority/mirror discipline.
@@ -375,3 +395,51 @@ verify_installer() {
 
 verify_installer install.sh "$authority_installer"
 verify_installer install.ps1 "$authority_ps1"
+
+# The releases page, last: the tag at the commit, the notes since the release
+# before it (NODECODE_PUBLISH_NOTES_SINCE names another base), and every
+# archive with its sidecar, the same bytes the pointers name. The pointers have
+# already moved, so a failure here says the release is live and only the page
+# is missing; a rerun of the label uploads over its own assets.
+notes="$work/release-notes.md"
+since="${NODECODE_PUBLISH_NOTES_SINCE:-$(gh release list -R "$github_repo" --exclude-drafts --limit 20 --json tagName --jq '.[].tagName' | grep -vx "$tag" | head -n 1 || true)}"
+if [ -n "$since" ] && ! git rev-parse -q --verify "$since^{commit}" > /dev/null; then
+  git fetch -q origin tag "$since" || true
+fi
+heading="Changes"
+range=(-n 30 "$commit")
+if [ -n "$since" ] && base="$(git rev-parse -q --verify "$since^{commit}")"; then
+  heading="Changes since $since"
+  range=("$base..$commit")
+fi
+{
+  printf 'nodecode %s, build %s: `nodecode --version` prints %s+%s.\n\n' "$version" "$label" "$version" "$label"
+  printf 'Install:\n\n    curl -fsSL %s/install.sh | sh\n    irm %s/install.ps1 | iex    # Windows PowerShell\n\n' "$base_url" "$base_url"
+  printf 'A running nodecode takes it on its own.\n\n## %s\n\n' "$heading"
+  git log --no-merges --format='%H %s' "${range[@]}" | while read -r hash subject; do
+    printf -- '- %s (%s)\n' "${subject%% -- *}" "${hash:0:9}"
+  done
+} > "$notes"
+assets=()
+for platform in $platforms; do
+  archive="$(archive_of "$platform")"
+  assets+=("$archive" "$archive.sha256")
+  extra="$(extra_of "$platform")"
+  [ -z "$extra" ] || assets+=("$extra" "$extra.sha256")
+done
+if gh release view "$tag" -R "$github_repo" > /dev/null 2>&1; then
+  gh release upload "$tag" -R "$github_repo" --clobber "${assets[@]}" &&
+    gh release edit "$tag" -R "$github_repo" --notes-file "$notes" > /dev/null
+else
+  gh release create "$tag" -R "$github_repo" --target "$commit" --title "nodecode $version" \
+    --notes-file "$notes" --latest "${assets[@]}" > /dev/null
+fi || {
+  echo "publish: $label is live, but GitHub release $tag did not land; rerun the publish of $label to list it" >&2
+  exit 1
+}
+listed="$(gh release view "$tag" -R "$github_repo" --json assets --jq '.assets | length')"
+[ "$listed" -ge "${#assets[@]}" ] || {
+  echo "publish: GitHub release $tag lists $listed assets, not ${#assets[@]}" >&2
+  exit 1
+}
+echo "publish: $tag is on the releases page with $listed assets: $(gh release view "$tag" -R "$github_repo" --json url --jq .url)"
