@@ -117,7 +117,7 @@ B="$2"
 run="$B/run"
 repo="$run/repo"
 name="nodecode-$label-arm64-darwin"
-export HOME="$B/home"
+export HOME="$B/env"
 export XDG_CACHE_HOME="$HOME/.cache"
 export PATH="$B/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 unset NODECODE_HOME SBCL_HOME CPATH LIBRARY_PATH || true

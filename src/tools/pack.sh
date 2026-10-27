@@ -113,8 +113,8 @@ if [ "$os" = linux ]; then
   case "$build_home" in
     "$account_home"|"$account_home"/*) echo "pack: NODECODE_BUILD_HOME must not be under $account_home" >&2; exit 1 ;;
   esac
-  mkdir -p "$build_home/home"
-  export HOME="$build_home/home" XDG_CACHE_HOME="$build_home/home/.cache"
+  mkdir -p "$build_home/env"
+  export HOME="$build_home/env" XDG_CACHE_HOME="$build_home/env/.cache"
   unset SBCL_HOME
 fi
 # The Linux image is dumped on build.sh's SBCL, never on the `sbcl' the box
