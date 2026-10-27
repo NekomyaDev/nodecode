@@ -269,10 +269,12 @@ when its turn could not start, :STATUS :FAILED and why."
   "Fork SESSION at ANCHOR once per TASK, put each its WORDS, and wait for
 every fork's turn to end. => (values RESULTS FORKS): RESULTS as fork
 answers them, FORKS each (:N :SESSION :RIVAL :ACTS), what it defined."
-  (let ((forks '()))
+  (let ((forks '())
+        (call (fork-call-id)))
     ;; However this call ends, no fork outlives the wait for it, and no name
-    ;; stays claimed by one.
-    (with-cleanup ((dolist (fork forks)
+    ;; stays claimed by one; the shells hear how the forks ended.
+    (with-cleanup ((fork-progress-end call)
+                   (dolist (fork forks)
                          (let ((child (getf fork :session))
                                (started (getf fork :turn)))
                            (remhash child *fork-waiting*)
@@ -286,6 +288,7 @@ answers them, FORKS each (:N :SESSION :RIVAL :ACTS), what it defined."
             for n from 1
             do (push (fork-start session anchor n text task seconds (nth (1- n) rivals)) forks))
       (setf forks (reverse forks))
+      (fork-progress-begin call session forks)
       (let ((deadline (+ (get-internal-real-time)
                          (* (+ seconds *fork-grace-seconds*) internal-time-units-per-second))))
         (values (loop for fork in forks
@@ -343,6 +346,133 @@ never started, as it stands."
                             (t :cancelled))
               :answer (or (turn-answer child turn) (fork-ending child turn))
               :ran (fork-ran child turn)))))
+
+;;; --- live progress: how a call's forks stand, for the shells it shows in ---
+;;; A fork works in a session of its own, so the parent's transcript holds only
+;;; the call that made it. This registry is what the gateway reads (its
+;;; background watcher, gateway.lisp) to tell the parent's shells, live, how
+;;; each fork stands: running or how it ended, the calls it made, the note of
+;;; its newest, and once it ends, its time and its answer's first line.
+;;; Retention: live-only, as the background band is; each fork's own session
+;;; keeps the durable truth.
+
+(defstruct fork-call
+  "One running fork call: the SESSION it runs in, its FORKS as FORK-TASKS holds
+them, when it STARTED, each fork's ENDED (N . MS) as first seen, the frame last
+SENT (its JSON text) and PAYLOAD, when it was last READ, and FINAL once the
+call has returned."
+  session forks (started (get-internal-real-time)) (ended '()) sent payload (read 0) final)
+
+(defvar *fork-calls* (make-hash-table :test #'equal :synchronized t)
+  "The tool call id of each fork call whose shells are still to hear how it
+ended -> its FORK-CALL.")
+
+(defparameter *fork-progress-seconds* 0.5
+  "How often FORK-COLLECT-PROGRESS reads a running call's forks again.")
+
+(defun fork-call-id ()
+  "The id of the eval call running this fork, or NIL outside a tool call."
+  (let ((id (and (boundp 'nle::*executing-tool-call-id*)
+                 (symbol-value 'nle::*executing-tool-call-id*))))
+    (and (stringp id) (plusp (length id)) id)))
+
+(defun fork-progress-begin (id session forks)
+  "Register call ID's FORKS, run from SESSION, for the shells to hear of."
+  (when id
+    (sb-ext:with-locked-hash-table (*fork-calls*)
+      ;; A call no watcher ever collected (an image with no gateway) goes
+      ;; once it is old, so the table never grows past the calls running.
+      (loop with old = (- (get-internal-real-time) (* 600 internal-time-units-per-second))
+            for key being the hash-keys of *fork-calls* using (hash-value call)
+            when (and (fork-call-final call) (< (fork-call-started call) old))
+              do (remhash key *fork-calls*))
+      (setf (gethash id *fork-calls*) (make-fork-call :session session :forks forks)))))
+
+(defun fork-progress-end (id)
+  "Call ID has returned: its next collect says how its forks ended, last."
+  (when-let (call (and id (gethash id *fork-calls*)))
+    (setf (fork-call-final call) t)))
+
+(defun fork-progress-note (line)
+  "A fork's call note as a shell lists it: without its ;; and without the
+`forkN:' a fork may open it with to tell its calls from its siblings'."
+  (let* ((text (string-left-trim "; " (or line "")))
+         (rest (and (>= (length text) 5) (string-equal "fork" text :end2 4)
+                    (string-left-trim " " (subseq text 4))))
+         (colon (and rest (plusp (length rest)) (digit-char-p (char rest 0))
+                     (position #\: rest :end (min (length rest) 40)))))
+    (if colon (string-left-trim " " (subseq rest (1+ colon))) text)))
+
+(defun fork-progress-answer (text)
+  "The first line of TEXT that says something, its Markdown marks taken off."
+  (when-let (line (find-if (lambda (line) (find-if #'alphanumericp line)) (lines (or text ""))))
+    (clip (trimmed (string-left-trim "#->* " (remove-if (lambda (char) (member char '(#\* #\`))) line)))
+          200 :ellipsis "…")))
+
+(defun fork-progress-row (fork call now)
+  "FORK of CALL as its shells draw it at NOW (internal real time)."
+  (let* ((n (getf fork :n))
+         (child (getf fork :session))
+         (turn (getf fork :turn))
+         (kind (cond ((getf fork :status) "turn.failed")
+                     (turn (turn-terminal-kind turn))))
+         (ran (and turn (fork-ran child turn)))
+         (ended (and kind (or (cdr (assoc n (fork-call-ended call)))
+                              (let ((ms (round (* 1000 (- now (fork-call-started call)))
+                                               internal-time-units-per-second)))
+                                (push (cons n ms) (fork-call-ended call))
+                                ms)))))
+    (json-object "n" n
+                 "label" (clip (trimmed (or (first (lines (trimmed (or (getf fork :task) "")))) "")) 60 :ellipsis "…")
+                 "status" (cond ((null kind) "running")
+                                ((equal kind "turn.completed") "completed")
+                                ((equal kind "turn.failed") "failed")
+                                (t "cancelled"))
+                 "calls" (length ran)
+                 :opt "note" (and ran (fork-progress-note (car (last ran))))
+                 :opt "ms" ended
+                 :opt "answer" (and kind (fork-progress-answer
+                                          (or (getf fork :answer)
+                                              (and turn (or (turn-answer child turn) (fork-ending child turn)))))))))
+
+(defun fork-collect-progress (&aux (now (get-internal-real-time)) (frames '()))
+  "A frame for each running fork call whose forks stand otherwise than its last
+frame said, read at most every *FORK-PROGRESS-SECONDS*, and one last for each
+call that has returned: => (SESSION PAYLOAD) each, the session_fork_progress
+frames the gateway's watcher publishes."
+  (dolist (entry (sb-ext:with-locked-hash-table (*fork-calls*)
+                   (loop for id being the hash-keys of *fork-calls* using (hash-value call)
+                         when (or (fork-call-final call)
+                                  (>= (- now (fork-call-read call))
+                                      (* *fork-progress-seconds* internal-time-units-per-second)))
+                           collect (cons id call))))
+    (destructuring-bind (id . call) entry
+      (let* ((final (fork-call-final call))
+             (payload (ignore-errors
+                       (json-object "session_id" (fork-call-session call)
+                                    "tool_call_id" id
+                                    "forks" (coerce (loop for fork in (fork-call-forks call)
+                                                          collect (fork-progress-row fork call now))
+                                                    'vector)
+                                    :when final "done" t)))
+             (text (and payload (encode-json-object payload))))
+        (setf (fork-call-read call) now)
+        (when (and text (not (equal text (fork-call-sent call))))
+          (setf (fork-call-sent call) text
+                (fork-call-payload call) payload)
+          (push (list (fork-call-session call) payload) frames))
+        (when final (remhash id *fork-calls*)))))
+  (nreverse frames))
+
+(defun fork-progress-snapshots (session)
+  "The last frame of each of SESSION's fork calls still running, for a shell
+that attaches while they run."
+  (sb-ext:with-locked-hash-table (*fork-calls*)
+    (loop for call being the hash-values of *fork-calls*
+          when (and (equal session (fork-call-session call))
+                    (fork-call-payload call)
+                    (not (fork-call-final call)))
+            collect (fork-call-payload call))))
 
 ;;; --- what a fork may define ------------------------------------------------------
 ;;; A fork runs in the operator's own image: what it evaluates is live there at

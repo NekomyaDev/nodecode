@@ -465,6 +465,7 @@ of stacking."
      ;; fixture to the keeper's gates below.
      (:file "organism/generation-test")
      (:file "organism/fork-test")
+     (:file "organism/fork-progress-test")
      ;; launch-keeper-test follows warm-test: it drives the same warm fixtures
      ;; for the keeper and the layer cache's own pruning.
      (:file "organism/launch-keeper-test")
@@ -513,6 +514,7 @@ of stacking."
      (:file "tui/editor-test")
      (:file "tui/ui-test")
      (:file "tui/activity-label-spacing-test")
+     (:file "tui/fork-tree-test")
      (:file "tui/inline-color-test")
      (:file "tui/frame-clock-test")
      (:file "tui/history-test")

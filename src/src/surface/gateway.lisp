@@ -1689,7 +1689,12 @@ no prompt queued."
       (record-background-shell-exit-from-update update)
       ;; The watcher edge of the exit wake: an idle session wakes now.
       (when wake
-        (ignore-errors (wake-idle-session update.session-id))))))
+        (ignore-errors (wake-idle-session update.session-id)))))
+  ;; How a running call's forks stand (fork.lisp FORK-COLLECT-PROGRESS):
+  ;; live-only frames, as the band's are; each fork's session is the record.
+  (dolist (frame (ignore-errors (nlk:fork-collect-progress)))
+    (ignore-errors
+     (publish-event (first frame) "session_fork_progress" (second frame)))))
 
 (defun start-background-exec-watcher ()
   (unless *background-exec-watcher*
@@ -2136,6 +2141,9 @@ position (the cursor a resume names), the target its next turn binds
                     (send-frame-under-lock
                      gws peer "session_background_process_updated"
                      (background-process-update-payload update)))
+                  ;; A call's forks still running, as their last frame said.
+                  (dolist (progress (ignore-errors (nlk:fork-progress-snapshots sid)))
+                    (send-frame-under-lock gws peer "session_fork_progress" progress))
                   ;; The queue is live-only too: a steer parked on the running
                   ;; turn reaches this peer as the queue's frame, not the replay,
                   ;; and so does the end of a follow-up the replay folded as

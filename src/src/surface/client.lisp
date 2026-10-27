@@ -697,6 +697,19 @@ so a streamed item and its durable fact are one row, never two."
                  (when-let (row (find-band-row st nil shell-id))
                    (note-band-preview row preview)))))))
         st)
+       ((string= kind "session_fork_progress")
+        ;; Live-only: how the forks of a running call stand (fork.lisp
+        ;; FORK-COLLECT-PROGRESS), set on the call's own rows as their
+        ;; "forks" -- a fresh metadata object, so each row's memo sees the
+        ;; change. Never replayed: each fork's session is the record.
+        (let ((call-id (json-value payload :string "tool_call_id"))
+              (forks (json-value payload :array "forks")))
+          (when (and call-id forks)
+            (dolist (row (transcript-rows st))
+              (when (and (eq :tool-call row.kind) (equal call-id row.tool-call-id))
+                (setf row.metadata (copy-json-object (and (hash-table-p row.metadata) row.metadata)
+                                                     "forks" forks))))))
+        st)
        ((string= kind "session_input_queue_snapshot_updated")
         ;; Queue state, and the band's one authority. A steer parks here,
         ;; with no fact of its own until promotion starts it as the next

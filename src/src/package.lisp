@@ -332,6 +332,7 @@ renderer, the program loop.")
    ;; back through the generations to the step a check broke; a name's
    ;; versions raced on the image's own calls (fork.lisp) ---
    #:fork #:fork-error #:fork-error-detail #:fork-session-p
+   #:fork-collect-progress #:fork-progress-snapshots
    #:*fork-task-input* #:*fork-earlier-input* #:*fork-keep-input* #:*fork-bisect-input*
    ;; --- history recall: the model-facing log read (recall.lisp) ---
    ;; The PRO-LONG read contract the eviction stub advertises: scan clipped,

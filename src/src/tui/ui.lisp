@@ -3113,6 +3113,46 @@ activity's title. NIL for a call with none."
                         (row-exit-document row))
     title))
 
+(defun fork-tree-llines (row width &key (indent 0))
+  "Call ROW's forks, one line each on the rails /sessions draws, while the
+gateway says how they stand (session_fork_progress, client.lisp): a running
+fork's calls and its newest note, an ended one's mark, time and the first
+line of its answer. NIL for a call that forked nothing."
+  ;; Without these, a call that forked stands as one line for minutes while
+  ;; its forks work in sessions of their own, and nothing says what they do.
+  (when-let (forks (and (hash-table-p row.metadata) (json-value row.metadata :array "forks")))
+    (let* ((last (1- (length forks)))
+           (names (map 'list (lambda (fork) (or (json-value fork :text "label") "")) forks))
+           (room (min 24 (reduce #'max names :key #'text-display-width :initial-value 0))))
+      (loop for fork across forks
+            for name in names
+            for index from 0
+            collect (let* ((status (json-value fork :string "status"))
+                           (running (equal status "running"))
+                           (done (equal status "completed"))
+                           (ms (json-value fork :integer "ms"))
+                           (words (json-value fork :text (if running "note" "answer")))
+                           (shown (clip-text-to-width name room))
+                           (line (make-lline :text (make-string indent :initial-element #\Space)
+                                             :tone :muted)))
+                      (append-lline-run line (if (= index last) "╰ " "├ ") :tone :muted)
+                      (append-lline-run line (cond (running "○") (done "✓") (t "✗"))
+                                        :tone (cond (running :tool) (done :success) (t :danger)))
+                      (append-lline-run line (format nil " fork ~d  " (json-value fork :integer "n")) :tone :muted)
+                      (append-lline-run line (concatenate 'string shown
+                                                          (make-string (max 0 (- room (text-display-width shown)))
+                                                                       :initial-element #\Space))
+                                        :tone :foreground)
+                      (append-lline-run line (format nil "  ~2d call~:p~@[ · ~a~]" (or (json-value fork :integer "calls") 0)
+                                                     (and ms (format-turn-elapsed ms)))
+                                        :tone :muted)
+                      (unless (or running done)
+                        (append-lline-run line (format nil " · ~a" status) :tone :danger))
+                      (when words
+                        (append-lline-run line (format nil "  ~a" (nlk:one-line words))
+                                          :tone (if running :muted :foreground) :italic running))
+                      (clip-lline line width))))))
+
 (defun tool-header-llines (row &aux (activity (row-activity row))
                                     (status (if (row-load-errors row) "error" row.tool-status))
                                     (exited (json-value row.metadata :object "background_shell"))
@@ -3936,13 +3976,16 @@ mark: its metadata says `bare'."
                                (when-let (image (row-image-plist row))
                                  (cons (image-card-title-lline image row) (image-band-llines image row width))))))
                 ((and (eq *tool-detail* :standard) (not (detail-open-p (tool-row-expand-key row))))
-                 (list (tool-summary-lline row)))
+                 (cons (tool-summary-lline row)
+                       (fork-tree-llines row width :indent (- *transcript-detail-column*
+                                                              (nth-value 2 (body-gutter :prose))))))
                 ((when-let (image (row-image-plist row))
                    (cons (image-card-title-lline image row) (image-band-llines image row width))))
                 (t
                  (append (if (eq *tool-detail* :standard)
                              (cons (tool-summary-lline row) (tool-command-llines row))
                              (tool-header-llines row))
+                         (fork-tree-llines row width :indent 2)
                          (tool-output-llines row width)))))
              (:system-notice
               (if-let (summary (row-notice-summary row))
@@ -4861,6 +4904,8 @@ the state's live execs, shows what it has written under it."
                                          ;; card held, two columns in under it, the
                                          ;; card's title aside.
                                          (append
+                                          ;; A call that forked lists its forks under it.
+                                          (mapcar #'stepped-in (fork-tree-llines member (- width 2)))
                                           (when (run-member-open-p member)
                                             (mapcar #'stepped-in (without-note member (rest (row-body-llines member width)))))
                                           (listed-output member width backgrounds))))

@@ -324,6 +324,10 @@ carry is refused by the decoder and shown as `unsupported projection type'
     ;; replay (src/protocol/background_exec.zig retention
     ;; table).
     "session_background_process_updated"
+    ;; Live-only: how the forks of a running call stand (organism/fork.lisp
+    ;; FORK-COLLECT-PROGRESS), drawn under the call. Retention: live-only --
+    ;; each fork's own session is the durable record; never replayed.
+    "session_fork_progress"
     ;; Live-only queue state: the durable snapshot is
     ;; evidence and never streams, so this frame is how an
     ;; attached peer learns of a parked steer -- on admission,

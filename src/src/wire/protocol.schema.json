@@ -297,6 +297,7 @@
             "sync_protocol_error",
             "gateway_turn_command_result",
             "session_background_process_updated",
+            "session_fork_progress",
             "session_input_queue_snapshot_updated",
             "session_rows",
             "turn_started",
