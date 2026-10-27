@@ -396,15 +396,16 @@ once when a model is chosen, before anyone prompts it."
 
 (defun connection-knob-segs (model)
   "The footer's knob, a link to /privacy: green for Private, light blue otherwise; NIL before
-the pick is known."
+the pick is known, and NIL when the check measured nothing -- an unchecked connection says
+nothing the footer needs (asked 2026-10-27: drop `Connection unchecked')."
   (let* ((key (connection-key model))
          (check (and key (gethash key *connection-checks*)))
          (target (cons :command "privacy")))
-    (when check
-      (list (if (eq check :checking)
-                (hover-seg model "◌ Checking connection…" target :muted)
-                (hover-seg model (format nil "● ~a" (getf check :label)) target
-                           (if (eq :private (getf check :level)) :success :connection)))))))
+    (cond ((null check) nil)
+          ((eq check :checking) (list (hover-seg model "◌ Checking connection…" target :muted)))
+          ((eq :unchecked (getf check :level)) nil)
+          (t (list (hover-seg model (format nil "● ~a" (getf check :label)) target
+                              (if (eq :private (getf check :level)) :success :connection)))))))
 
 ;;; The box stacks the checklist as pills, one a fact a line, a blank line between each. A pill is
 ;;; two halves like the footer's account badge: what it checks on the chip grey, padded so every
