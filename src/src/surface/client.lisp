@@ -2726,7 +2726,7 @@ gateway."
   "Answer the connect challenge FRAME on WS as this nodecode's MODE client
 INSTANCE, TOKEN its operator token."
   (wsd:send ws (encode-gateway-connect (gethash "challenge_nonce" (nlk:sync-message-payload frame))
-                                       "nodecode" "0.0.1" mode (string-downcase (nlk:platform))
+                                       "nodecode" *user-agent-version* mode (string-downcase (nlk:platform))
                                        instance :operator-token token)))
 
 (defun run-chat-gateway (&key session-id port

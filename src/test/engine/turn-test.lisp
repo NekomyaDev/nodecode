@@ -4050,7 +4050,7 @@ every one of them."
   ;; (LOAD-ASD binds ASDF-USER, which is where NODECODE-VERSION lands).
   (let ((version (asdf:component-version (asdf:find-system "nodecode"))))
     (is (stringp version))
-    (is (eql 0 (search "0.0.1" version)) "the declared base leads")
+    (is (every (lambda (part) (and (plusp (length part)) (every #'digit-char-p part))) (uiop:split-string (subseq version 0 (position #\+ version)) :separator ".")) "the declared base leads, dotted numbers")
     (is (find #\+ version) "the commit rides it — this checkout has git to ask")
     (is (equal version (nle::compose-user-agent-version))))
   (let ((rule (symbol-function (find-symbol "NODECODE-VERSION" :asdf-user)))
