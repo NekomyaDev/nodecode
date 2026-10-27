@@ -66,7 +66,7 @@ fi
 label="$(git rev-parse --short=9 "$REV")"
 name="nodecode-${label}-${arch}-${os}"
 work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf "$work" "${XDG_CACHE_HOME:-$HOME/.cache}"/common-lisp/*"$work"' EXIT
 
 # The build tree is the revision, not the checkout: `git archive' takes what is
 # committed and nothing else -- no unstaged edits, and no untracked files,
@@ -99,6 +99,24 @@ glibc_within_floor() { # FILE WHAT
   return 1
 }
 
+# A stranger reads this build, so no account's home may be written in it.
+# SBCL records every path it compiles or loads -- quicklisp's libraries,
+# ASDF's cache, the SBCL runtime's own contribs, the cells' sources -- in the
+# image and the fasls, so the build runs under a home that names nobody. On
+# Linux that is NODECODE_BUILD_HOME (/var/tmp/nodecode-build by default), which
+# keeps quicklisp on the pinned dist, ASDF's cache and the SBCL build between
+# runs; the Mac arm points HOME at its own neutral root (pack-macos.sh). The
+# gate before the tarball refuses a tree that still carries the account's home.
+account_home="$(eval echo "~$(id -un)")"
+if [ "$os" = linux ]; then
+  build_home="${NODECODE_BUILD_HOME:-/var/tmp/nodecode-build}"
+  case "$build_home" in
+    "$account_home"|"$account_home"/*) echo "pack: NODECODE_BUILD_HOME must not be under $account_home" >&2; exit 1 ;;
+  esac
+  mkdir -p "$build_home/home"
+  export HOME="$build_home/home" XDG_CACHE_HOME="$build_home/home/.cache"
+  unset SBCL_HOME
+fi
 # The Linux image is dumped on build.sh's SBCL, never on the `sbcl' the box
 # has on PATH: that runtime was compiled against the box's own glibc headers,
 # and from 2.38 on they turn an atoi into __isoc23_strtol, which no older
@@ -120,11 +138,26 @@ if [ "$os" = linux ]; then
   fi
   export PATH="$sbcl/bin:$PATH" SBCL_HOME="$sbcl/lib/sbcl"
   sbcl --version
+  # quicklisp in the neutral home, on the dist every arm builds against, and
+  # the system's dependencies present before the build asks for them.
+  dist=2026-01-01
+  if [ ! -f "$HOME/quicklisp/setup.lisp" ]; then
+    curl -fsSLo "$work/quicklisp.lisp" https://beta.quicklisp.org/quicklisp.lisp
+    sbcl --noinform --non-interactive --no-userinit --load "$work/quicklisp.lisp" --eval '(quicklisp-quickstart:install)'
+  fi
+  printf '%s\n' '(let ((quicklisp-init (merge-pathnames "quicklisp/setup.lisp" (user-homedir-pathname))))' \
+    '  (when (probe-file quicklisp-init) (load quicklisp-init)))' > "$HOME/.sbclrc"
+  sbcl --noinform --non-interactive \
+    --eval "(unless (equal (ql-dist:version (ql-dist:find-dist \"quicklisp\")) \"$dist\") (ql-dist:install-dist \"http://beta.quicklisp.org/dist/quicklisp/$dist/distinfo.txt\" :replace t :prompt nil))"
+  ( cd "$work/src" && sbcl --dynamic-space-size 4096 --control-stack-size 8MB --noinform --non-interactive \
+      --eval '(push (truename ".") asdf:*central-registry*)' --eval '(ql:quickload "nodecode" :silent t)' >/dev/null )
 fi
 
 ( cd "$work" && NODECODE_BUILD_COMMIT="$label" just release )
 
-stage="$repo/$OUT/$name"
+# Staged beside the neutral home, never inside the checkout: the cells compile
+# here and their fasls keep this path. The tree moves to OUT once it passes.
+stage="$(dirname "$HOME")/stage/$name"
 rm -rf "$stage"
 mkdir -p "$stage/src"
 cp "$work/nodecode"          "$stage/nodecode"
@@ -177,6 +210,18 @@ if find "$stage" -type l | grep -q .; then
   find "$stage" -type l >&2
   exit 1
 fi
+
+# The gate: the build account's home is written nowhere in the tree a stranger
+# unpacks (SBCL keeps every build path in the image and the fasls).
+leak="$(grep -rlaF "$account_home/" "$stage" || true)"
+if [ -n "$leak" ]; then
+  echo "pack: refusing, the build account's home ($account_home) is written in $(printf '%s\n' "$leak" | wc -l | tr -d ' ') files, e.g.:" >&2
+  printf '%s\n' "$leak" | head -5 >&2
+  exit 1
+fi
+mkdir -p "$repo/$OUT"
+rm -rf "$repo/$OUT/$name"
+mv "$stage" "$repo/$OUT/$name"
 
 cd "$repo/$OUT"
 rm -f "$name.tar.gz" "$name.tar.gz.sha256"

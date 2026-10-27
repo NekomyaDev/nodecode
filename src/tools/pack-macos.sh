@@ -16,9 +16,10 @@
 # headless serve and the release feed proof. Not the lane's launchd step:
 # the Mac is a person's machine, and its LaunchAgents are theirs.
 #
-# Everything it writes on the Mac is under one directory of that account's
-# home (NODECODE_MACOS_BUILD_DIR, nodecode-build by default), with HOME pointed
-# into it for every step: the toolchain (just, the bootstrap SBCL taken from
+# Everything it writes on the Mac is under one directory that names no account
+# (NODECODE_MACOS_BUILD_DIR, /Users/Shared/nodecode-build by default: SBCL
+# writes every build path into the release), with HOME pointed into it for
+# every step: the toolchain (just, the bootstrap SBCL taken from
 # Homebrew's bottle without installing it, the patched SBCL), quicklisp and
 # the compile caches stay there between releases, and the build tree of each
 # run is removed once the tarball is home. It installs nothing: Homebrew's zstd
@@ -38,9 +39,13 @@ cd "$repo"
 
 . "$repo/src/tools/publish-config.sh"
 mac="$(publish_setting NODECODE_MACOS_HOST)" || exit 1
-build_dir="${NODECODE_MACOS_BUILD_DIR:-nodecode-build}"
-case "$build_dir" in
-  .|..|*/*|'') echo "pack-macos: NODECODE_MACOS_BUILD_DIR is one directory name under the Mac's home, not '$build_dir'" >&2; exit 1 ;;
+# The Mac builds under a root that names nobody, never under the account's
+# home: SBCL writes every path it compiles or loads into the image and the
+# fasls, and pack.sh's gate refuses a tree that carries the account's home.
+mroot="${NODECODE_MACOS_BUILD_DIR:-/Users/Shared/nodecode-build}"
+case "$mroot" in
+  /Users/Shared/?*|/opt/?*) ;;
+  *) echo "pack-macos: NODECODE_MACOS_BUILD_DIR is an absolute path under /Users/Shared or /opt, not '$mroot'" >&2; exit 1 ;;
 esac
 command -v python3 >/dev/null 2>&1 || { echo 'pack-macos: python3 is needed to read the tarball back against the tree' >&2; exit 1; }
 
@@ -71,16 +76,16 @@ facts="$(ssh_mac 'uname -sm' 2>&1)" || {
 work="$(mktemp -d)"
 locked=''
 cleanup() {
-  if [ -n "$locked" ]; then ssh_mac "rm -rf \"\$HOME/$build_dir/.lock\"" >/dev/null 2>&1 || true; fi
+  if [ -n "$locked" ]; then ssh_mac "rm -rf \"$mroot/.lock\"" >/dev/null 2>&1 || true; fi
   rm -rf "$work"
 }
 trap cleanup EXIT INT TERM
 
 # One build at a time on the Mac: the run directory is one per account.
 owner="$(hostname) pid $$ $label $(date -u +%FT%TZ)"
-if ! ssh_mac "mkdir -p \"\$HOME/$build_dir\" && mkdir \"\$HOME/$build_dir/.lock\" && printf '%s\n' '$owner' > \"\$HOME/$build_dir/.lock/owner\""; then
-  held="$(ssh_mac "cat \"\$HOME/$build_dir/.lock/owner\"" 2>/dev/null || true)"
-  printf 'pack-macos: another build holds ~/%s/.lock on %s (%s); remove it when none runs\n' "$build_dir" "$mac" "${held:-no owner}" >&2
+if ! ssh_mac "mkdir -p \"$mroot\" && mkdir \"$mroot/.lock\" && printf '%s\n' '$owner' > \"$mroot/.lock/owner\""; then
+  held="$(ssh_mac "cat \"$mroot/.lock/owner\"" 2>/dev/null || true)"
+  printf 'pack-macos: another build holds %s/.lock on %s (%s); remove it when none runs\n' "$mroot" "$mac" "${held:-no owner}" >&2
   exit 1
 fi
 locked=1
@@ -302,17 +307,17 @@ MAC
 chmod 0755 "$ship/mac.sh"
 
 rm -f "$archive" "$archive.sha256"
-echo "pack-macos: building $name on $mac under ~/$build_dir; the log is $log"
+echo "pack-macos: building $name on $mac under $mroot; the log is $log"
 # The run directory is each build's own: what the last one left is replaced.
 tar -C "$ship" -cf - repo mac.sh |
-  ssh_mac "rm -rf \"\$HOME/$build_dir/run\" && mkdir -p \"\$HOME/$build_dir/run\" && tar -xf - -C \"\$HOME/$build_dir/run\""
+  ssh_mac "rm -rf \"$mroot/run\" && mkdir -p \"$mroot/run\" && tar -xf - -C \"$mroot/run\""
 rc=0
-ssh_mac "/bin/bash \"\$HOME/$build_dir/run/mac.sh\" $label \"\$HOME/$build_dir\"" 2>&1 | tee "$log" || rc=$?
-[ "$rc" = 0 ] || { echo "pack-macos: the Mac run failed (rc $rc); read $log (its tree stays in ~/$build_dir/run on $mac)" >&2; exit 1; }
+ssh_mac "/bin/bash \"$mroot/run/mac.sh\" $label \"$mroot\"" 2>&1 | tee "$log" || rc=$?
+[ "$rc" = 0 ] || { echo "pack-macos: the Mac run failed (rc $rc); read $log (its tree stays in $mroot/run on $mac)" >&2; exit 1; }
 verdict="$(grep "^macos-release-ok $label " "$log" | tail -n 1)"
 [ -n "$verdict" ] || { echo "pack-macos: the Mac never said 'macos-release-ok $label'; read $log" >&2; exit 1; }
 
-scp -q "$mac:$build_dir/run/repo/dist/$name.tar.gz" "$mac:$build_dir/run/repo/dist/$name.tar.gz.sha256" "$OUT/"
+scp -q "$mac:$mroot/run/repo/dist/$name.tar.gz" "$mac:$mroot/run/repo/dist/$name.tar.gz.sha256" "$OUT/"
 local_sha="$(sha256sum "$archive" | cut -d' ' -f1)"
 sidecar_sha="$(cut -d' ' -f1 < "$archive.sha256")"
 mac_sha="$(printf '%s\n' "$verdict" | sed -n 's/.* sha256 \([0-9a-f]*\).*/\1/p')"
@@ -375,6 +380,6 @@ PY
 
 # The build tree goes; the toolchain, quicklisp and the caches stay for the
 # next release.
-ssh_mac "rm -rf \"\$HOME/$build_dir/run\"" || true
+ssh_mac "rm -rf \"$mroot/run\"" || true
 echo "pack-macos: $verdict"
 echo "pack-macos: $name.tar.gz sha256 $local_sha"
