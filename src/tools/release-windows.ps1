@@ -40,7 +40,7 @@ $scratchCache = Join-Path $Work 'cache'
 $scratchTemp = Join-Path $Work 'temp'
 New-Item -ItemType Directory -Force $scratchHome, $scratchCache, $scratchTemp | Out-Null
 # windows-release.lisp finds quicklisp under (user-homedir-pathname), which SBCL
-# reads off USERPROFILE: the scratch home gets the dependency tree as a
+# reads off HOME (set below): the scratch home gets the dependency tree as a
 # junction, never a copy -- the same quicklisp dist the Linux build compiles
 # against -- and nothing else of this user's.
 # The tree itself sits at a path that names nobody, C:\nodecode-build\quicklisp,
@@ -57,6 +57,10 @@ if (-not (Test-Path (Join-Path $neutralQl 'setup.lisp'))) {
 }
 New-Item -ItemType Junction -Path (Join-Path $scratchHome 'quicklisp') -Target $neutralQl | Out-Null
 $env:USERPROFILE = $scratchHome
+# SBCL's (user-homedir-pathname) reads HOME first and then the profile folder
+# from the Windows API, never USERPROFILE: without HOME the build loaded the
+# account's own quicklisp and wrote C:/Users/<account>/ into the image.
+$env:HOME = $scratchHome
 $env:HOMEDRIVE = Split-Path -Qualifier $scratchHome
 $env:HOMEPATH = $scratchHome.Substring(2)
 $env:NODECODE_HOME = Join-Path $scratchHome '.nodecode'
