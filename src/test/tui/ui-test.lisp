@@ -3885,7 +3885,9 @@ and the DELIVERY its handler declares."
         ("alpha one" "the first line is selected") ("beta two" "the drag reaches the second line"))
       (let ((cmd (nth-value 1 (mouse-update model #'nlt:make-mouse-release-msg 13 y1 :button :left))))
         (is (null cmd))
-        (is (equal nle::+selection-copied-hint+
+        ;; No program, so nothing was written -- and the hint says that,
+        ;; never `copied' (issue #31).
+        (is (equal nle::+selection-copy-failed-hint+
                    (nle::status-said model))))
       (is (nle::chat-model-selection model))
       ;; A fresh press clears it. The cell differs from the drag's own
@@ -3894,6 +3896,85 @@ and the DELIVERY its handler declares."
       ;; not a plain click.
       (click-at model 9 y0)
       (is (null model.selection)))))
+
+(deftest copy-says-what-the-clipboard-took ()
+  ;; Issue #31: the hint said `copied' before any write, whether or not
+  ;; anything took the text. The status now waits for the writer and says
+  ;; what happened: copied for a clipboard tool, sent for OSC 52 alone,
+  ;; failed for neither, and nothing-to-copy for an empty mark.
+  (with-frame-model (model 80 24 :session-id "copy-truth"
+                     :paint ((nle::ingest-message-fact "assistant" "alpha one")))
+    ;; The whole path through a program with no clipboard tool: the release
+    ;; says nothing yet, the OSC 52 request reaches the loop as terminal-io,
+    ;; and the status lands only after that write.
+    (let ((program (nlt:make-program model)))
+      (setf (nlt:program-running program) t
+            (nle::chat-model-program model) program)
+      (with-saved-globals ((nlt:*clipboard-use-command* nil))
+        (let ((y (mouse-y-for-text model "alpha one"))
+              (mailbox (nlt::program-mailbox program)))
+          (mouse-update model #'nlt:make-mouse-click-msg 6 y :button :left)
+          (mouse-update model #'nlt:make-mouse-motion-msg 12 y :button :left)
+          (mouse-update model #'nlt:make-mouse-release-msg 12 y :button :left)
+          (is (null (nle::status-said model)) "nothing is said before the write")
+          (let ((io (sb-concurrency:receive-message mailbox :timeout 5)))
+            (is (nlt:terminal-io-msg-p io))
+            (is (search "]52;c;" (with-output-to-string (out)
+                                   (funcall (nlt:terminal-io-msg-thunk io) out)))))
+          (let ((notice (sb-concurrency:receive-message mailbox :timeout 5)))
+            (nle:update model notice)
+            ;; What reached the terminal is said as OSC 52.
+            (is (equal nle::+selection-osc52-hint+ (nle::status-said model)))))))
+    (flet ((said (outcome)
+             (nle:update model (nle::clipboard-outcome-notice outcome))
+             (nle::status-said model)))
+      (is (equal nle::+selection-copied-hint+ (said '(:command "wl-copy"))))
+      (is (equal nle::+selection-osc52-hint+ (said :osc52)) "OSC 52 alone is never `copied'")
+      (is (equal nle::+selection-copy-failed-hint+ (said :failed))))
+    (setf (nle::chat-model-selection model) nil)
+    (nle::copy-frame-selection model)
+    (is (equal nle::+selection-empty-hint+ (nle::status-said model)) "nothing marked says so")))
+
+(deftest a-drag-past-the-band-edge-scrolls-and-the-mark-keeps-its-rows ()
+  ;; Issue #31: a drag held past the transcript's last row scrolled nothing,
+  ;; and a mark could not hold a row the window did not show. Held below the
+  ;; band, the drag scrolls on every tick, the mark follows, and the copy
+  ;; carries the rows on both sides of the window; a scroll after the release
+  ;; moves the window, never the marked words.
+  (with-frame-model (model 80 24 :session-id "drag-scroll"
+                     :paint ((nle::ingest-message-fact
+                              "assistant"
+                              (format nil "~{line ~2,'0d~^~%~%~}" (loop for i from 1 to 40 collect i)))))
+    (with-saved-globals ((nle::*drag-scroll-period-ms* 0))
+      (nle::scroll-transcript model :home)
+      (multiple-value-bind (top bottom) (nle::transcript-lane model)
+        (let* ((window model.band)
+               (start (nle::band-window-offset window))
+               (y0 (mouse-y-for-text model "line 01"))
+               (below (+ bottom 2)))
+          ;; Line 40 starts out of sight.
+          (is (not (find-if (lambda (row) (search "line 40" row)) (nle::frame-plain-rows model))))
+          (mouse-update model #'nlt:make-mouse-click-msg 3 y0 :button :left)
+          (mouse-update model #'nlt:make-mouse-motion-msg 20 below :button :left)
+          (is (> (nle::band-window-offset window) start) "the motion past the edge scrolls at once")
+          (loop repeat 300
+                until (nle::band-window-at-bottom-p window)
+                do (nle:update model (nlt:make-tick-msg)))
+          (is (nle::band-window-at-bottom-p window) "held still, the ticks go on scrolling")
+          (mouse-update model #'nlt:make-mouse-release-msg 20 below :button :left)
+          (is (null (nle::drag-edge model)) "the release ends the edge scroll")
+          (let ((text (nle::frame-selection-text model)))
+            (is-carrying text
+              ("line 01" "the anchor's row, scrolled out of the window")
+              ("line 20" "a row the drag passed")
+              ("line 40" "the rows the scroll brought in"))
+            (is (eql 0 (search "line 01" text)) "the mark opens where the press stood")
+            (nle::scroll-transcript model :home)
+            (is (equal text (nle::frame-selection-text model)) "a scroll keeps the mark's words")
+            ;; Scrolled back, the wash is on the anchor's row again, and
+            ;; never on the shell's chrome.
+            (is (find (1- y0) (nle::mark-frame-cells model model.selection) :key #'first))
+            (is (<= top (first (first (nle::mark-frame-cells model model.selection)))))))))))
 
 (deftest a-pointer-that-moves-nothing-owes-no-frame ()
   ;; Terminals report the pointer at every cell it crosses, and most
@@ -4089,7 +4170,8 @@ and the DELIVERY its handler declares."
       (is-shape model (.selection (nle::word-selection-at model row column))
         (nle::frame-selection-text "gamma"))
       (nle:update model (nlt:make-mouse-release-msg :x x :y y :button :left))
-      (is-shape model (nle::status-said nle::+selection-copied-hint+)
+      ;; No program here: the copy says nothing was written (issue #31).
+      (is-shape model (nle::status-said nle::+selection-copy-failed-hint+)
         (nle::chat-model-selection is))
       (is (not (nle::note-left-press model row column))))))
 

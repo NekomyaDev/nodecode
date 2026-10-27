@@ -150,6 +150,19 @@ message's words, so a copy leaves it behind."
                          (subseq text end)))
           text))))
 
+(defun without-line-clock (model line text)
+  "TEXT, transcript LINE's plain text, with the clock a message's first line
+ends on blanked, column for column -- WITHOUT-MESSAGE-CLOCK for a line read
+off the transcript rather than the frame."
+  (multiple-value-bind (row from to) (message-timestamp-span model line)
+    (if row
+        (let ((start (plain-column-index text from))
+              (end (plain-column-index text (1+ to))))
+          (concatenate 'string (subseq text 0 start)
+                       (make-string (- end start) :initial-element #\Space)
+                       (subseq text end)))
+        text)))
+
 (defun message-timestamp-tooltip-rows (model row)
   "Wrapped tooltip fields using the shared display-width and line-break authority."
   (let* ((session (header-status-text model :detail :developer))

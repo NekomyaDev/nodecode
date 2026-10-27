@@ -225,6 +225,12 @@ as a window title, the empty string included."
   (is (string= (format nil "~C]52;c;aGVsbG8=~C\\" #\Escape #\Escape)
                (nlt::%osc52-sequence "hello"))))
 
+(deftest osc52-carries-the-text-as-utf-8 (let* ((text (format nil "row 006 ~C golf ~C done"
+                                                           (code-char #xb7) (code-char #x2022)))
+                                                (utf-8 (cl-base64:usb8-array-to-base64-string
+                                                        (sb-ext:string-to-octets text :external-format :utf-8)))))
+  (is (search utf-8 (nlt::%osc52-sequence text)) "a dot or a bullet pastes as itself, not as Latin-1"))
+
 (deftest osc52-is-wrapped-for-a-multiplexer (let* ((seq (nlt::%osc52-sequence "x"))
                                                    (tmux (nlt::%wrap-passthrough seq :tmux))
                                                    (screen (nlt::%wrap-passthrough seq :screen))))
@@ -234,6 +240,18 @@ as a window title, the empty string included."
   (is (string= (format nil "~CP" #\Escape) (subseq screen 0 2)) "screen takes DCS chunks")
   (is (string= (format nil "~C\\" #\Escape) (subseq screen (- (length screen) 2))) "ended by ST")
   (is (string= seq (nlt::%wrap-passthrough seq nil)) "no multiplexer, no wrapping"))
+
+(deftest osc52-behind-tmux-goes-bare-and-wrapped (let ((out (make-string-output-stream))
+                                                       (seq (nlt::%osc52-sequence "x"))))
+  ;; A default tmux drops both the bare sequence (set-clipboard external) and
+  ;; the passthrough (allow-passthrough off); either option turned on must be
+  ;; enough, so both go, the bare one first.
+  (nlt:copy-to-clipboard "x" :stream out :multiplexer :tmux)
+  (let ((written (get-output-stream-string out)))
+    (is (eql 0 (search seq written)) "the bare sequence first: tmux's own clipboard write")
+    (is (search (nlt::%wrap-passthrough seq :tmux) written) "then the passthrough to the outer terminal"))
+  (nlt:copy-to-clipboard "x" :stream out :multiplexer nil)
+  (is (string= seq (get-output-stream-string out)) "no multiplexer: the sequence once, bare"))
 
 (deftest clipboard-falls-back-to-osc52-without-a-helper (let ((out (make-string-output-stream))))
   (is (eq :osc52 (nlt:copy-to-clipboard "clip me" :stream out)) "the backend is OSC 52")

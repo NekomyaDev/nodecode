@@ -142,15 +142,27 @@ through POST — SEND, or %DEFER from a signal handler. => (WIDTH . HEIGHT)."
     (funcall post program (make-window-size-msg :width width :height height))
     (cons width height)))
 
-(defun write-clipboard (program text)
+(defun write-clipboard (program text &optional report)
   "Put TEXT on the system clipboard without waiting behind the worker: the
 helper chain (wl-copy, xclip, xsel) runs on a thread of its own, and when
 no helper takes the text the OSC 52 fallback is posted as a terminal-io
-request the loop thread writes. Answers the thread."
-  (nlk:spawn "nlt-clipboard"
-    (unless (and *clipboard-use-command* (copy-text-command text))
-      (send program (make-terminal-io-msg
-                     :thunk (lambda (stream) (copy-to-clipboard text :stream stream)))))))
+request the loop thread writes. REPORT, when given, is called once with what
+happened -- (:COMMAND NAME) when helper NAME took the text, :OSC52 when the
+sequence reached the terminal, :FAILED when neither did -- on the clipboard
+thread or the loop thread, whichever learned it. Answers the thread."
+  ;; OSC 52 is a request the terminal may ignore (several ship with it off,
+  ;; and a default tmux drops it), so :OSC52 says only that it was written:
+  ;; the caller must not say `copied' on it.
+  (flet ((said (outcome) (when report (ignore-errors (funcall report outcome)))))
+    (nlk:spawn "nlt-clipboard"
+      (let ((helper (and *clipboard-use-command* (ignore-errors (copy-text-command text)))))
+        (cond (helper (said (list :command helper)))
+              ((send program (make-terminal-io-msg
+                              :thunk (lambda (stream)
+                                       (said (handler-case (copy-to-clipboard text :stream stream)
+                                               (error () :failed)))))))
+              ;; A program that stopped drops the request: nothing was written.
+              (t (said :failed)))))))
 
 ;;; --- commands and the worker ---------------------------------------------
 

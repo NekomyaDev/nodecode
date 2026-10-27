@@ -178,6 +178,26 @@ stopped and the thread joined however BODY leaves."
                                (funcall (nlt:terminal-io-msg-thunk msg) out)))))
       (is (null (sb-concurrency:list-mailbox-messages (nlt::program-commands program)))))))
 
+(deftest clipboard-writes-report-what-took-the-text (let ((program (make-probe-program))))
+  ;; Issue #31: a write nothing took looked exactly like one that worked.
+  ;; The report comes once the writer knows: OSC 52 when only the terminal
+  ;; was written to (from the loop thread, after the write), FAILED when a
+  ;; stopped program dropped even that.
+  (with-saved-globals ((nlt:*clipboard-use-command* nil))
+    (let* ((said '())
+           (writer (nlt:write-clipboard program "clip me" (lambda (outcome) (push outcome said)))))
+      (bt2:join-thread writer)
+      (is (null said) "nothing is said before the terminal is written")
+      (let ((msg (first (sb-concurrency:list-mailbox-messages program.mailbox))))
+        (is (nlt:terminal-io-msg-p msg))
+        (funcall (nlt:terminal-io-msg-thunk msg) (make-string-output-stream))
+        (is (equal '(:osc52) said) "OSC 52 written is said as OSC 52, never as a helper")))
+    (setf program.running nil)
+    (let* ((said '())
+           (writer (nlt:write-clipboard program "clip me" (lambda (outcome) (push outcome said)))))
+      (bt2:join-thread writer)
+      (is (equal '(:failed) said) "a dropped request is a failed write"))))
+
 (deftest errors-reach-the-handler-slot-and-the-loop-goes-on (let* ((program (make-probe-program))
                                                                    (reports '())))
   (setf program.error-handler (lambda (where condition) (push (cons where condition) reports)))

@@ -607,20 +607,42 @@ takes DCS tmux; with every ESC doubled, screen takes 256-byte DCS chunks."
 
 (defun %osc52-sequence (content)
   "The OSC 52 write of CONTENT to the clipboard selection."
-  (format nil "~C]52;c;~A~C\\" #\Escape (cl-base64:string-to-base64-string content) #\Escape))
+  ;; Base64 of the UTF-8 octets: CL-BASE64:STRING-TO-BASE64-STRING takes each
+  ;; character's code as one byte, so a dot or a bullet pasted as Latin-1.
+  (format nil "~C]52;c;~A~C\\" #\Escape
+          (cl-base64:usb8-array-to-base64-string
+           (sb-ext:string-to-octets content :external-format :utf-8))
+          #\Escape))
 
 (defun copy-text-command (content)
-  "Try the helper chain with CONTENT; T when one accepted it."
-  ;; Each helper an argv fed the text on stdin: macOS's pasteboard, else Wayland's and X11's.
-  (some (lambda (argv) (nlk:exits-zero-p argv :input content))
+  "Try the helper chain with CONTENT: the name of the helper that accepted it
+(\"wl-copy\", \"xclip\" ...), or NIL when none did."
+  ;; Each helper an argv fed the text on stdin: macOS's pasteboard, else
+  ;; Wayland's and X11's. A helper with no display to reach exits nonzero (a
+  ;; wl-copy outside a Wayland session, an xclip with no X server), so a host
+  ;; that has the program but not its display answers NIL here, never T.
+  (some (lambda (argv) (and (nlk:exits-zero-p argv :input content) (first argv)))
         #+darwin '(("pbcopy"))
         #-darwin '(("wl-copy")
                    ("xclip" "-selection" "clipboard")
                    ("xsel" "--clipboard" "--input"))))
 
-(defun copy-to-clipboard (content &key stream)
+(defun copy-to-clipboard (content &key stream
+                                       (multiplexer (cond ((uiop:getenv "TMUX") :tmux)
+                                                          ((uiop:string-prefix-p
+                                                            "screen" (uiop:getenv "TERM"))
+                                                           :screen))))
   "Write CONTENT to the system clipboard through OSC 52 on STREAM, wrapped
-for the multiplexer this process runs under. Answers :OSC52."
-  (write-string (%wrap-passthrough (%osc52-sequence content)) stream)
+for the MULTIPLEXER this process runs under. Answers :OSC52: the sequence
+was written, and whether the terminal honours it is the terminal's to say."
+  ;; Behind tmux the bare sequence goes first, then the wrapped one: tmux takes
+  ;; the bare one as its own clipboard write (set-clipboard on) and passes the
+  ;; wrapped one to the outer terminal only under allow-passthrough, and it
+  ;; ships both off, so either alone is dropped by a default tmux without a
+  ;; word. The two land wherever either is on; with both on, the clipboard is
+  ;; set twice to the same text.
+  (let ((sequence (%osc52-sequence content)))
+    (when (eq multiplexer :tmux) (write-string sequence stream))
+    (write-string (%wrap-passthrough sequence multiplexer) stream))
   (force-output stream)
   :osc52)
