@@ -1,5 +1,5 @@
-;;;; connection.lisp --- the footer's connection knob: who can read a prompt sent to the model
-;;;; this shell has chosen, and how it travels there, measured once when the model is chosen.
+;;;; connection.lisp --- the footer's model name, green or red: who can read a prompt sent to the
+;;;; model this shell has chosen, and how it travels there, measured once when the model is chosen.
 ;;;;
 ;;;; SPDX-License-Identifier: MIT
 ;;;;
@@ -254,7 +254,11 @@ is what the check measures. NIL when nothing names one."
         (when stream (ignore-errors (close stream :abort t)))
         (ignore-errors (usocket:socket-close socket))))))
 
-(defun connection-probe (url &key (timeout 8))
+(defparameter *connection-probe-timeout* 3
+  "Seconds one handshake may take before the check gives up on it: a pick is measured off the
+loop, and a host that takes longer is one the next try or the next shell measures.")
+
+(defun connection-probe (url &key (timeout *connection-probe-timeout*))
   "Measure the connection URL's requests take, sending nothing of anyone's => a plist: :HOST, :PROXY,
 and :LOCAL, :PLAIN (no TLS), the handshake's facts, :HTTPS alone (the handshake could not be read,
 the exchange went through) or :ERROR."
@@ -281,72 +285,85 @@ the exchange went through) or :ERROR."
 
 ;;; --- the verdict ------------------------------------------------------------------
 
-(defun connection-label (level proxy)
+(defun connection-label (level)
+  "The verdict in a word or two: the box's first line, and what the footer's colour means."
   (case level
-    (:private "Connection secure · Private")
-    (:not-private (if proxy "Proxy · Not private" "Connection secure · Not private"))
-    (:unknown "Unknown · Unsecure")
+    (:private "Private")
+    ((:not-private :unknown) "Not private")
     (:local "Local")
     (:plain "Not encrypted")
-    (t "Connection unchecked")))
+    (t "Not checked yet")))
+
+(defun connection-level-tone (level)
+  "LEVEL's colour: green where a prompt reaches only us or this machine, red where someone else
+can read it, NIL where nothing was measured."
+  (case level
+    ((:private :local) :success)
+    ((:not-private :unknown :plain) :danger)))
+
+(defun public-issuer-p (issuer)
+  (some (lambda (name) (search name (string-downcase issuer))) *public-certificate-issuers*))
+
+(defun stored-phrase (stored)
+  "What the terms' STORED says, as the start of a line."
+  (cond ((equal stored "no") "Not kept")
+        ((equal stored "unknown") "Storage unknown")
+        ((equal stored "yes") "Kept")
+        ((equal stored "no limit") "Kept with no time limit")
+        ((search "cache" stored) (format nil "Kept as a ~a" stored))
+        (t (format nil "Kept ~a" stored))))
 
 (defun connection-rows (level probe terms plan)
-  "The box's checklist: (MARK LABEL VALUE), MARK :OK measured or our own, :CLAIM the provider's
-word, :NO exposed or unknown, NIL a plain line."
+  "The box's lines, one fact each and the problems grouped: (MARK TEXT), MARK :OK measured or our
+own, :CLAIM only the provider's word or not known, :NO exposed, NIL the line naming the source.
+Training gets a line only when the terms do not say no."
   (let* ((own (getf terms :own))
          (tls (getf probe :tls))
          (issuer (getf probe :issuer))
          (proxy (getf probe :proxy))
          (cloudflare (getf probe :cloudflare))
-         (terms-known (and terms (not plan))))
-    (flet ((promise (label good value) (list (cond ((not good) :no) (own :ok) (t :claim)) label value)))
-      (if (eq level :local)
-          (list (list (if (or tls (member (getf probe :host) '("localhost" "127.0.0.1" "::1") :test #'string-equal))
-                          :ok :no)
-                      "Encrypted" (if tls "TLS" "local"))
-                (list :ok "Readable by" "your machine or network")
-                (list :ok "Route" "local")
-                (list :ok "Linked to you" "no"))
-          (list
-           (cond (tls (list :ok "Encrypted" (format nil "~a~:[~; · PQC~]" (ppcre:regex-replace "^TLSv" tls "TLS ")
-                                                     (ppcre:scan "(?i)mlkem|kyber" (or (getf probe :group) "")))))
-                 ((getf probe :https) (list :ok "Encrypted" "HTTPS"))
-                 ((getf probe :plain) (list :no "Encrypted" "no"))
-                 (t (list :no "Encrypted" "unchecked")))
-           (cond (proxy (list :no "Intercepted" (format nil "proxy ~a" proxy)))
-                 ((getf probe :plain) (list :no "Intercepted" "possible"))
-                 ((null issuer) (list (if (getf probe :https) :claim :no) "Intercepted" "unchecked"))
-                 ((some (lambda (name) (search name (string-downcase issuer))) *public-certificate-issuers*)
-                  (list :ok "Intercepted" "no"))
-                 (t (list :claim "Intercepted" issuer)))
-           (list (if (and own (not cloudflare) (not proxy)) :ok :no) "Readable by"
-                 (format nil "~{~a~^ · ~}"
-                         (remove nil (list (and cloudflare "Cloudflare")
-                                           (if terms (getf terms :name) (getf probe :host))
-                                           (and (getf terms :router) "upstream per request")))))
-           (if terms
-               (promise "Route" (eq t (getf terms :eu))
-                        (format nil "~a~@[ · ~a~]" (getf terms :where)
-                                (case (getf terms :eu) ((t) "EU") (:option "EU option"))))
-               (list :no "Route" "unknown"))
-           (if terms-known
-               (promise "Stored" (equal "no" (getf terms :stored)) (getf terms :stored))
-               (list :no "Stored" "unknown"))
-           (if terms-known
-               (promise "Trained on" (eq :no (getf terms :trains))
-                        (case (getf terms :trains)
-                          (:no "no") (:free-tier "free tier") (:drafts "draft models") (t "unknown")))
-               (list :no "Trained on" "unknown"))
-           (if terms-known
-               (promise "ZDR" (eq :yes (getf terms :zdr))
-                        (case (getf terms :zdr)
-                          (:yes "yes") (:request "on request") (:enterprise "enterprise") (:no "no")
-                          (t "unknown")))
-               (list :no "ZDR" "unknown"))
-           (list (if own :ok :no) "Linked to you" (if own "country · billing" "your account"))
-           (list nil "Source" (cond ((null terms) "not on our list")
-                                    (plan "this plan is not on our list")
-                                    (t (format nil "~a · ~a" (getf terms :source) *provider-terms-checked*)))))))))
+         (stored (getf terms :stored))
+         (wire (cond (tls (format nil "~a~:[~; · PQC~]" (ppcre:regex-replace "^TLSv" tls "TLS ")
+                                  (ppcre:scan "(?i)mlkem|kyber" (or (getf probe :group) ""))))
+                     ((getf probe :https) "HTTPS"))))
+    (if (eq level :local)
+        (list (list :ok "Stays on your machine or network"))
+        (remove
+         nil
+         (list
+          (cond ((getf probe :plain) (list :no "Not encrypted: anyone on the way can read it"))
+                (proxy (list :no (format nil "~@[~a, ~]through proxy ~a" wire proxy)))
+                ((null issuer) (list :claim (format nil "~a, interception unchecked" (or wire "Encryption unchecked"))))
+                ((public-issuer-p issuer) (list :ok (format nil "~a, not intercepted" wire)))
+                (t (list :claim (format nil "~a, certificate from ~a" wire issuer))))
+          (list (if (and own (not cloudflare) (not proxy)) :ok :no)
+                (format nil "Readable by ~{~a~^, ~}~@[ · ~a~]"
+                        (remove nil (list (and cloudflare "Cloudflare")
+                                          (if terms (getf terms :name) (getf probe :host))
+                                          (and (getf terms :router) "the provider it picks")))
+                        (and terms (format nil "~a~@[ · ~a~]" (getf terms :where)
+                                           (case (getf terms :eu) ((t) "EU") (:option "EU option"))))))
+          (cond ((null terms) (list :no "Not on our list: storage, training and route unknown"))
+                (plan (list :claim (format nil "Your ~a plan's terms are not on our list: storage and training unknown"
+                                           (getf terms :name))))
+                (t (list (cond ((not (equal stored "no")) :no) (own :ok) (t :claim))
+                         (format nil "~a, linked to ~a~@[ (~a)~]"
+                                 (stored-phrase stored)
+                                 (if own "country and billing only" "your account")
+                                 (unless own
+                                   (case (getf terms :zdr)
+                                     (:yes (and (not (equal stored "no")) "ZDR available"))
+                                     (:request "ZDR on request")
+                                     (:enterprise "ZDR: enterprise only")
+                                     (:no "no ZDR")))))))
+          (when (and terms (not plan))
+            (case (getf terms :trains)
+              (:no nil)
+              (:free-tier (list :no "Trained on in the free tier"))
+              (:drafts (list :no "Used to train draft models"))
+              (t (list :claim "Training on your prompts: unknown"))))
+          (and terms (not plan)
+               (list nil (format nil "~a · ~a" (getf terms :source) *provider-terms-checked*))))))))
 
 (defun connection-verdict (provider probe)
   "What PROBE, the connection PROVIDER's turns take, means => (:LEVEL :LABEL :HOST :NAME :ROWS):
@@ -361,15 +378,73 @@ word, :NO exposed or unknown, NIL a plain line."
                       ((and (getf terms :own) (not proxy) (not (getf probe :cloudflare))) :private)
                       (terms :not-private)
                       (t :unknown))))
-    (list :level level :label (connection-label level proxy) :host (getf probe :host)
+    (list :level level :label (connection-label level) :host (getf probe :host)
           :name (or (getf terms :name) (getf probe :host))
           :rows (connection-rows level probe terms plan))))
 
-;;; --- the shell: measured once a pick, the knob, the box ------------------------------
+;;; --- the shell: measured once a pick, remembered a host, the colour, the box ---------
+;;; A pick is measured off the loop when its target lands. The gateway names the endpoint: it is
+;;; the process whose cells dial it (a sign-in provider's lane is known there, not here). What a
+;;; host measured is kept on disk, so the next shell colours the name at once and measures again
+;;; behind it. A check that measured nothing is never kept: it tries again a few times, then
+;;; leaves the pick unmeasured for the next time its target lands.
+
+(defparameter *connection-retry-delays* '(2 5 15)
+  "Seconds before each further try when a check measured nothing: a fresh shell may learn its
+endpoint only once the catalog or the gateway's cells have landed.")
+
+(defparameter *connection-memory-days* 7
+  "How long a host's measurement on disk stands in for a fresh one.")
+
+(defvar *connection-memory-path* nil
+  "Where measurements are kept, else the home's connection-checks.sexp.")
+
+(defvar *connection-memory* :unread
+  "URL => (UNIVERSAL-TIME . PROBE) as kept on disk, :UNREAD until first asked.")
+
+(defvar *connection-memory-lock* (sb-thread:make-mutex :name "connection memory"))
+
+(defun connection-memory-file ()
+  (or *connection-memory-path* (nlk:home "connection-checks.sexp")))
+
+(defun connection-memory ()
+  "The kept measurements, read from disk once."
+  (sb-thread:with-recursive-lock (*connection-memory-lock*)
+    (when (eq *connection-memory* :unread)
+      (setf *connection-memory*
+            (let ((table (make-hash-table :test #'equal))
+                  (kept (ignore-errors
+                         (with-open-file (in (connection-memory-file) :if-does-not-exist nil)
+                           (and in (with-standard-io-syntax
+                                     (let ((*read-eval* nil) (*package* (find-package :cl-user)))
+                                       (read in nil nil))))))))
+              (loop for (url time . probe) in (and (listp kept) kept)
+                    when (and (stringp url) (integerp time)) do (setf (gethash url table) (cons time probe)))
+              table)))
+    *connection-memory*))
+
+(defun remembered-probe (url)
+  "What URL's host measured within *CONNECTION-MEMORY-DAYS*, with today's proxy, else NIL."
+  (when-let (kept (sb-thread:with-recursive-lock (*connection-memory-lock*)
+                    (gethash url (connection-memory))))
+    (and (< (- (get-universal-time) (car kept)) (* *connection-memory-days* 86400))
+         (list* :proxy (connection-proxy) (alexandria:remove-from-plist (cdr kept) :proxy)))))
+
+(defun remember-probe (url probe)
+  "Keep PROBE, a measurement that succeeded, as URL's."
+  (sb-thread:with-recursive-lock (*connection-memory-lock*)
+    (let ((table (connection-memory)))
+      (setf (gethash url table) (cons (get-universal-time) (alexandria:remove-from-plist probe :proxy)))
+      (ignore-errors
+       (nlk:write-file-atomically
+        (connection-memory-file)
+        (with-standard-io-syntax
+          (let ((*package* (find-package :cl-user)) (*print-readably* nil))
+            (prin1-to-string (loop for url being the hash-keys of table using (hash-value (time . probe))
+                                   collect (list* url time probe))))))))))
 
 (defvar *connection-checks* (make-hash-table :test #'equal :synchronized t)
-  "(PROVIDER . MODEL) => that pick's CONNECTION-VERDICT, or :CHECKING while it is measured. Live-only:
-one measurement a pick a shell.")
+  "(PROVIDER . MODEL) => that pick's CONNECTION-VERDICT, or :CHECKING while it is measured.")
 
 (defun connection-key (model)
   "(PROVIDER . MODEL-ID) of the target MODEL's footer names, else NIL."
@@ -378,104 +453,76 @@ one measurement a pick a shell.")
           (model-id (json-value raw-model :text)))
       (and (eq state :configured) provider (cons provider model-id)))))
 
+(defun connection-target-endpoint (model key)
+  "The URL KEY's turns dial: what the gateway answered for that target, else this process's own
+reading of its lane."
+  (let ((facts (gateway-model-facts model)))
+    (or (and (equal (getf facts :provider) (car key)) (equal (getf facts :model) (cdr key))
+             (getf facts :endpoint))
+        (connection-endpoint (car key) (cdr key)))))
+
+(defun measure-connection (model key retry-delays)
+  "KEY's verdict from a fresh handshake, trying again after each of RETRY-DELAYS while there is no
+endpoint or the handshake fails => NIL when no try measured anything."
+  (loop for delay in (cons 0 retry-delays)
+        do (when (plusp delay) (sleep delay))
+           (let* ((url (connection-target-endpoint model key))
+                  (probe (and url (connection-probe url :timeout *connection-probe-timeout*))))
+             (when (and probe (not (getf probe :error)))
+               (remember-probe url probe)
+               (return (connection-verdict (car key) probe))))))
+
 (defun check-connection (model)
   "Measure the connection MODEL's chosen target takes, off the loop, unless this pick has been:
-once when a model is chosen, before anyone prompts it."
+once when a model is chosen, before anyone prompts it. A host measured before colours it at once."
   (when-let (key (connection-key model))
     (unless (gethash key *connection-checks*)
-      (setf (gethash key *connection-checks*) :checking)
+      (let* ((url (connection-target-endpoint model key))
+             (kept (and url (remembered-probe url))))
+        (setf (gethash key *connection-checks*) (if kept (connection-verdict (car key) kept) :checking)))
       (off-loop model
-                (lambda ()
-                  (connection-verdict (car key) (connection-probe (connection-endpoint (car key) (cdr key)))))
+                ;; Retries wait, so only on the thread OFF-LOOP spawns, never on the loop's own.
+                (lambda () (measure-connection model key (and (chat-model-program model)
+                                                             *connection-retry-delays*)))
                 (lambda (model value)
-                  (setf (gethash key *connection-checks*)
-                        (if (off-loop-failure value)
-                            (connection-verdict (car key) (list :error (off-loop-failure value)))
-                            value))
+                  (cond ((and (consp value) (not (off-loop-failure value)))
+                         (setf (gethash key *connection-checks*) value))
+                        ;; Nothing measured: a kept answer stands, else the pick stays unmeasured.
+                        ((eq :checking (gethash key *connection-checks*))
+                         (remhash key *connection-checks*)))
                   (render-state model))))))
 
-(defun connection-knob-segs (model)
-  "The footer's knob, a link to /privacy: green for Private, light blue otherwise; NIL before
-the pick is known, and NIL when the check measured nothing -- an unchecked connection says
-nothing the footer needs (asked 2026-10-27: drop `Connection unchecked')."
+(defun connection-identity-tone (model)
+  "The footer's model name's colour (asked 2026-10-27: the name itself, no knob): green when the
+chosen model's connection is private, red when it is not, NIL -- the footer's own -- while it is
+measured or when it could not be."
   (let* ((key (connection-key model))
-         (check (and key (gethash key *connection-checks*)))
-         (target (cons :command "privacy")))
-    (cond ((null check) nil)
-          ((eq check :checking) (list (hover-seg model "◌ Checking connection…" target :muted)))
-          ((eq :unchecked (getf check :level)) nil)
-          (t (list (hover-seg model (format nil "● ~a" (getf check :label)) target
-                              (if (eq :private (getf check :level)) :success :connection)))))))
+         (check (and key (gethash key *connection-checks*))))
+    (and (consp check) (connection-level-tone (getf check :level)))))
 
-;;; The box stacks the checklist as pills, one a fact a line, a blank line between each. A pill is
-;;; two halves like the footer's account badge: what it checks on the chip grey, padded so every
-;;; split lines up, then the mark and the value on the verdict's own colour.
-
-(defun connection-fact-text (fact)
-  "FACT, a checklist row (MARK LABEL VALUE), as plain words: its mark, what it checks, its value."
-  (destructuring-bind (mark label value) fact
-    (format nil "~a ~a ~a" (case mark (:ok "✓") (:no "✗") (t "?")) label value)))
-
-(defun connection-pill (fact label-width room)
-  "FACT, a checklist row (MARK LABEL VALUE), as one pill no wider than ROOM: what it checks padded
-to LABEL-WIDTH on the chip grey, then the mark and the value on the verdict's colour; where grounds
-do not paint, the same words with the mark and value in that colour."
-  (destructuring-bind (mark label value) fact
-    (let ((tone (case mark (:ok :success) (:no :danger) (t :tool)))
-          (sign (case mark (:ok "✓") (:no "✗") (t "?")))
-          (pad (make-string (max 0 (- label-width (text-display-width label))) :initial-element #\Space)))
-      (clip-segs (if (grounds-shown-p)
-                     (let ((chip (style-for-tone :sheet-chip)))
-                       (list (make-seg :text (format nil " ~a~a " label pad) :bold t
-                                       :tone (vstyle :fg (visual-style-fg chip))
-                                       :ground (vstyle :bg (visual-style-bg chip)))
-                             (account-chip-seg (format nil "~a ~a" sign value) tone)))
-                     (list (make-seg :text (format nil "~a~a " label pad) :tone :foreground :bold t)
-                           (make-seg :text (format nil "~a ~a" sign value) :tone tone :bold t)))
-                 room :mark *dialog-row-overflow-mark*))))
-
-(defun connection-dialog-rows (key check &optional (room 96))
-  "The box: the pick KEY names and its verdict, then CHECK's facts as pills stacked one to a line
-with a blank line between each, no wider than ROOM columns, then where the terms come from."
+(defun connection-dialog-rows (key check)
+  "The box: the pick KEY names, whose provider and its verdict, then CHECK's facts a line each with
+their mark, then where the terms come from. No blank lines."
   (when (consp check)
-    (let* ((room (max 8 (- room 4)))
-           (facts (remove nil (getf check :rows) :key #'first))
-           (label-width (reduce #'max facts :key (lambda (fact) (text-display-width (second fact))) :initial-value 0))
-           (source (find nil (getf check :rows) :key #'first))
-           (indent (make-seg :text "    " :tone :muted)))
-      (flet ((pill-row (fact)
-               (let ((pill (connection-pill fact label-width room))
-                     (row (make-picker-row :heading t :value (list :connection))))
-                 (setf (picker-row-label row) (connection-fact-text fact)
-                       (picker-row-paint row) (lambda (selected room)
-                                                (declare (ignore selected room))
-                                                (values (cons indent pill) nil)))
-                 row))
-             (blank () (make-picker-row :heading t :label "" :value (list :connection))))
-        (append
-         (list (make-picker-row :heading t :label (format nil "~@[~a · ~]~a" (cdr key) (getf check :name))
-                                :mark "■" :mark-tone :accent :value (list :connection))
-               (make-picker-row :heading t :label (getf check :label) :mark "●" :value (list :connection)
-                                :mark-tone (if (eq :private (getf check :level)) :success :connection))
-               (blank))
-         (loop for (fact . more) on facts
-               collect (pill-row fact)
-               when more collect (blank))
-         (when source
-           (list (blank)
-                 (make-picker-row :heading t :value (list :connection) :mark " "
-                                  :label (format nil "~a ~a" (second source) (third source))))))))))
+    (cons (make-picker-row :heading t :value (list :connection)
+                           :tone (connection-level-tone (getf check :level))
+                           :label (format nil "~@[~a · ~]~a — ~a" (cdr key) (getf check :name) (getf check :label)))
+          (loop for (mark text) in (getf check :rows)
+                collect (make-picker-row :heading t :value (list :connection) :label text
+                                         :mark (case mark (:ok "✓") (:no "✗") (:claim "?") (t " "))
+                                         :mark-tone (case mark (:ok :success) (:no :danger) (:claim :tool) (t :muted))
+                                         :tone (and (null mark) :muted))))))
 
 (defun slash-privacy-op (model)
-  "Open the box the footer's knob opens: what the check measured for this pick and what the
-provider's terms say."
+  "Open the box: what the check measured for this pick and what the provider's terms say."
   (let* ((key (connection-key model))
          (check (and key (gethash key *connection-checks*))))
     (open-picker-dialog model "Connection"
-                        (connection-dialog-rows key check
-                                                (- (docked-panel-room (chat-model-term-width model) t) 2))
+                        (connection-dialog-rows key check)
                         (constantly nil)
                         :kind :privacy
-                        :empty-label (if (eq check :checking) "Checking connection…" "No model chosen yet")
+                        :empty-label (cond ((eq check :checking) "Checking…")
+                                           (key "Not checked yet")
+                                           (t "No model chosen yet"))
                         :hint "esc close")
     nil))

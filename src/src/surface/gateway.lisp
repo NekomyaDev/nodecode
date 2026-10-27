@@ -3036,7 +3036,11 @@ AIM-PROVIDER or AIM-MODEL and no session, that target over the gateway's."
      ;; shell shows it the moment the facts land, instead of learning it
      ;; from the first turn's failure or from a footer naming a model
      ;; the file never chose.
-     "refusal" (or (selection-refusal provider) *model-config-refusal* :null))))
+     "refusal" (or (selection-refusal provider) *model-config-refusal* :null)
+     ;; The URL a turn on this target dials, as the cells here resolve it: a shell's
+     ;; connection check measures this host (connection.lisp), since a sign-in
+     ;; provider's lane is known only where its cell runs.
+     "endpoint" (or (ignore-errors (connection-endpoint provider model)) :null))))
 
 (define-gateway-route handle-gateway-target-http (env)
   "GET /api/gateway/target — the target a turn would bind and its effort

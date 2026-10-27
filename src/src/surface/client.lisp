@@ -4539,11 +4539,6 @@ caveats a setup walk ended on (SETUP-ISSUE-SEGS) lead each and are shed last."
           (setf candidates (append (loop for candidate in candidates
                                          collect (append meter (list separator) candidate))
                                    (last candidates))))
-        ;; The connection knob (connection.lisp) leads the meter and is the last thing shed.
-        (when-let (knob (connection-knob-segs model))
-          (setf candidates (append (loop for candidate in candidates
-                                         collect (append knob (list separator) candidate))
-                                   (list knob))))
         (if issues
             (append (mapcar (lambda (candidate) (append issues (list separator) candidate)) candidates)
                     (list issues))
@@ -5715,7 +5710,7 @@ last read them, then read again from the gate (DIALOG-ACCOUNT-READ)."
   "=> (values PROVIDER MODEL-ID LADDER FACTS) from the gateway's target for
 this shell's session: LADDER the effort rungs it admits, weakest first, FACTS
 the footer's plist (:provider :model :unconfigured :pinned :pin-provider
-:pin-model :effort :refusal), and the default a new session starts on
+:pin-model :effort :refusal :endpoint), and the default a new session starts on
 (:default-provider :default-model)."
   ;; One dial answers the /think picker and the chrome, and an attached client
   ;; has no store to ask instead. The scope is what makes the answer address
@@ -5739,6 +5734,7 @@ the footer's plist (:provider :model :unconfigured :pinned :pin-provider
                   :pin-model (json-value pin :text "model")
                   :effort (json-value target :text "effort")
                   :refusal (json-value target :text "refusal")
+                  :endpoint (json-value target :text "endpoint")
                   :default-provider (json-value default :text "provider")
                   :default-model (json-value default :text "model")))))
 

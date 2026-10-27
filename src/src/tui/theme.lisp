@@ -204,8 +204,6 @@
     (:thought-strong ,(vstyle :fg '(155 194 232) :bold t))
     ;; Markdown [text](url) links: underlined info-blue text.
     (:link ,(vstyle :fg '(110 168 255)))
-    ;; The footer's connection knob for any provider but NODECODE's own: light blue.
-    (:connection ,(vstyle :fg '(125 211 252)))
     ;; A fact that wants a look before it is a problem: the header's
     ;; occupancy nearing the eviction line, /status's attention rows.
     (:warn ,(vstyle :fg '(253 186 116)) (:info :accent1))

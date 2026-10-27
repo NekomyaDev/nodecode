@@ -345,7 +345,8 @@ of stacking."
      (:file "surface/status")
      ;; account login is a CLI child over the HTTP account-link contract and canonical config/key writers.
      (:file "surface/account-login")
-     ;; connection: the footer's knob, one measured handshake a model pick and the provider terms.
+     ;; connection: the footer's green or red model name, one measured handshake a model pick
+     ;; and the provider terms.
      (:file "surface/connection")
      ;; backup: this home kept whole and brought back as a profile -- the
      ;; store read through health's reader, the archive profile.lisp's shape.

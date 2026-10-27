@@ -12705,7 +12705,10 @@ Segments are the one authority for text, color, clipping and target ranges."
       (flet ((action (text name) (hover-seg model text (cons :command name))))
         (let* ((left (if placeholder
                          (list (make-seg :text placeholder :tone :muted))
-                         (append (and identity (list (action identity "models")))
+                         ;; The name is green or red by who can read a prompt sent to it
+                         ;; (CONNECTION-IDENTITY-TONE): the footer's whole privacy word.
+                         (append (and identity (list (hover-seg model identity (cons :command "models")
+                                                                (or (connection-identity-tone model) :muted))))
                                  (when-let (effort (and provider model-id (footer-reasoning-effort model)))
                                    (list (action (format nil " (~a)" effort) "think")))
                                  (list (make-seg :text " · " :tone :muted)
