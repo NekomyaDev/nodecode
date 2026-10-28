@@ -442,7 +442,16 @@ function Add-Release([bool]$force) {
       } else {
         Copy-Item -Recurse -Force (Join-Path $payload '*') $staging
       }
-      Get-ChildItem -Path $staging -Recurse -File | Unblock-File -ErrorAction SilentlyContinue
+      # Only a file that carries the Mark of the Web is unblocked. tar.exe and
+      # .NET's unzip write none, so on a download this touches nothing.
+      # Unblock-File over every file - 300-odd - in a PowerShell that an
+      # unsigned nodecode.exe started, and then running the new executable,
+      # is what Bitdefender's Advanced Threat Defense blocks as
+      # SuspiciousBehavior during a self-update, quarantining the running
+      # nodecode.exe with it (reproduced on Windows 11 with Antivirus Free).
+      Get-ChildItem -Path $staging -Recurse -File |
+        Where-Object { Get-Item -LiteralPath $_.FullName -Stream Zone.Identifier -ErrorAction SilentlyContinue } |
+        Unblock-File -ErrorAction SilentlyContinue
       $keepable = ($stage -ne 'stage') -and -not $force -and -not $FromZip
       if (Test-Path $target) {
         if ($keepable -and (Test-LaidOut $target)) {
