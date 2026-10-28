@@ -8160,14 +8160,63 @@ d.isNil() ? '' : d.base64EncodedStringWithOptions(0).js"
 a screenshot lands there as PNG, an image copied from Preview or a page as
 TIFF, which is re-encoded.")
 
+(defparameter *windows-clipboard-image*
+  "$ProgressPreference = 'SilentlyContinue'
+$ErrorActionPreference = 'Stop'
+[void][Reflection.Assembly]::LoadWithPartialName('System.Windows.Forms')
+[void][Reflection.Assembly]::LoadWithPartialName('System.Drawing')
+$types = @{ '.png' = 'image/png'; '.jpg' = 'image/jpeg'; '.jpeg' = 'image/jpeg'; '.gif' = 'image/gif'; '.webp' = 'image/webp' }
+$d = [Windows.Forms.Clipboard]::GetDataObject()
+if ($d -eq $null) { exit 1 }
+$png = $d.GetData('PNG')
+if ($png -is [IO.MemoryStream]) { 'image/png ' + [Convert]::ToBase64String($png.ToArray()); exit 0 }
+if ($d.GetDataPresent([Windows.Forms.DataFormats]::FileDrop)) {
+  foreach ($f in $d.GetData([Windows.Forms.DataFormats]::FileDrop)) {
+    $t = $types[[IO.Path]::GetExtension($f).ToLowerInvariant()]
+    if ($t) { $t + ' ' + [Convert]::ToBase64String([IO.File]::ReadAllBytes($f)); exit 0 }
+  }
+}
+$i = [Windows.Forms.Clipboard]::GetImage()
+if ($i -ne $null) { $m = [IO.MemoryStream]::new(); $i.Save($m, [Drawing.Imaging.ImageFormat]::Png); 'image/png ' + [Convert]::ToBase64String($m.ToArray()); exit 0 }
+exit 1"
+  "The Windows clipboard's image as one `MEDIA-TYPE BASE64' line, through
+Windows PowerShell: the PNG a browser or the snipping tool puts there, else
+the first image file copied in Explorer, else the bitmap a screenshot key
+leaves, re-encoded as PNG. Nothing is printed, and the exit is 1, when the
+clipboard holds no image. No cmdlet runs, so no module loads: a cold run
+is the .NET start alone, about a fifth of a second.")
+
+(defun windows-clipboard-image-argv ()
+  "The argv that runs *WINDOWS-CLIPBOARD-IMAGE*: Windows PowerShell, which
+every Windows box carries, single-threaded as the clipboard requires, the
+script passed as -EncodedCommand (UTF-16LE base64) so no quote of it meets
+the command line."
+  (list "powershell.exe" "-NoProfile" "-NonInteractive" "-STA" "-EncodedCommand"
+        (cl-base64:usb8-array-to-base64-string
+         (sb-ext:string-to-octets *windows-clipboard-image* :external-format :utf-16le))))
+
+(defun clipboard-image-line (line)
+  "LINE as *WINDOWS-CLIPBOARD-IMAGE* prints it => (values MEDIA-TYPE BASE64),
+or NIL when it names no image type or carries no payload."
+  (when-let (space (and line (position #\Space line)))
+    (let ((media-type (subseq line 0 space))
+          (base64 (subseq line (1+ space))))
+      (when (and (member media-type '("image/png" "image/jpeg" "image/webp" "image/gif")
+                         :test #'string=)
+                 (plusp (length base64)))
+        (values media-type base64)))))
+
 (defun read-clipboard-image-base64 ()
   "=> (values MEDIA-TYPE BASE64) for the system clipboard's image, or NIL."
   ;; Probes the same Wayland/X11 helpers as the Zig readImageCommand,
   ;; capturing through `base64` so the payload never transits a character
-  ;; decode; a Mac has neither, and answers PNG from its pasteboard.
+  ;; decode; a Mac has neither, and answers PNG from its pasteboard; Windows
+  ;; answers the type and the payload together, in one PowerShell run.
+  #+win32
+  (clipboard-image-line (command-output (list (windows-clipboard-image-argv)) :stripped t))
+  #-win32
   (dolist (media-type '("image/png" "image/jpeg" "image/webp" "image/gif")) ; Zig image_media_types
     (when-let (output (command-output
-                       #+win32 '()
                        #+darwin (and (equal media-type "image/png")
                                      (list (list "osascript" "-l" "JavaScript"
                                                  "-e" *mac-clipboard-png*)))
@@ -8178,6 +8227,53 @@ TIFF, which is re-encoded.")
                                                  media-type)))
                        :stripped t))
       (return (values media-type output)))))
+
+(defun stage-composer-image (model media-type base64)
+  "Stage one image as a pending attachment of MODEL's next submit, behind an
+`[Image #N] ' marker typed where the cursor is. => T."
+  (editor-insert (chat-model-editor model)
+                 (format nil "[Image #~d] "
+                         (1+ (length (chat-model-pending-images model)))))
+  (alexandria:appendf (chat-model-pending-images model)
+                      (list (cons media-type base64)))
+  t)
+
+(defun paste-clipboard-image (model)
+  "Stage the system clipboard's image in MODEL's composer. => T when there
+was one."
+  (multiple-value-bind (media-type base64) (read-clipboard-image-base64)
+    (when media-type
+      (stage-composer-image model media-type base64))))
+
+(defun pasted-image-file (text)
+  "TEXT, a paste, when it is nothing but the path of an image file on this
+machine => (values MEDIA-TYPE BASE64), else NIL."
+  ;; What Windows Terminal pastes for a snip (Win+Shift+S, PrintScreen) or an
+  ;; image copied in Explorer -- the clipboard carries the file too, and the
+  ;; terminal pastes files as their paths -- and what a file dragged onto a
+  ;; terminal types. The path may come quoted; dragged onto a POSIX terminal,
+  ;; its spaces may come backslashed. The type is the file's own bytes, and a
+  ;; file past the provider's ceiling stays a path.
+  (let* ((path (string-trim '(#\Space #\Tab #\Newline #\Return) text))
+         (path (if (and (>= (length path) 2)
+                        (find (char path 0) "\"'")
+                        (char= (char path 0) (char path (1- (length path)))))
+                   (subseq path 1 (1- (length path)))
+                   path)))
+    (when (and (< 0 (length path) 4096)
+               (not (find #\Newline path))
+               (some (lambda (extension)
+                       (let ((end (- (length path) (length extension))))
+                         (and (plusp end) (string-equal extension path :start2 end))))
+                     '(".png" ".jpg" ".jpeg" ".gif" ".webp")))
+      (dolist (candidate (remove-duplicates
+                          (list path #-win32 (ppcre:regex-replace-all "\\\\(.)" path "\\1"))
+                          :test #'equal))
+        (let* ((octets (ignore-errors
+                        (nlt:file-octets (uiop:parse-native-namestring candidate) *image-max-bytes*)))
+               (media-type (nlt:image-media-type octets)))
+          (when media-type
+            (return (values media-type (cl-base64:usb8-array-to-base64-string octets)))))))))
 
 ;;; --- the docked dialog panel -------------------------------------------------
 ;;; One chrome for every dialog, mirroring src/tui/dialog.zig
@@ -12230,13 +12326,7 @@ from the ones COLLECT-DURING-WAIT hid inside provider wait."
            ;; Image paste (default Ctrl+V / Ctrl+Alt+V): probe the system
            ;; clipboard for an image and stage it as a pending attachment.
            ((model-key-matches-p model :paste-image key mod)
-            (multiple-value-bind (media-type base64) (read-clipboard-image-base64)
-              (when media-type
-                (editor-insert (chat-model-editor model)
-                               (format nil "[Image #~d] "
-                                       (1+ (length (chat-model-pending-images model)))))
-                (alexandria:appendf (chat-model-pending-images model)
-                                    (list (cons media-type base64))))))
+            (paste-clipboard-image model))
 
            ;; Copy the marked text again (default Ctrl+Shift+C) — anywhere on
            ;; the frame, since the mark is a screen region.
@@ -12320,10 +12410,22 @@ from the ones COLLECT-DURING-WAIT hid inside provider wait."
       ;; would: an open dialog's field when it has one — the API key the
       ;; setup wizard asks to have pasted — else the composer, through the
       ;; collapse rule ([Paste #N] past the Zig bounds).
+      ;; An EMPTY paste is the terminal's own paste key over a clipboard that
+      ;; holds no text: Windows Terminal keeps Ctrl+V for itself and, with only
+      ;; an image copied, sends ESC [ 200 ~ ESC [ 201 ~ and nothing between --
+      ;; so it asks for the image, as the paste-image key does. A paste that is
+      ;; only an image file's path -- a snip, an image copied in Explorer, a
+      ;; file dragged in -- stages that file.
       ((nlt:paste-msg-p msg)
        (cond ((chat-model-dialog model)
               (picker-dialog-paste model (nlt:paste-msg-text msg)))
-             (t (attach-composer-paste model (nlt:paste-msg-text msg))
+             (t (let ((text (nlt:paste-msg-text msg)))
+                  (if (zerop (length text))
+                      (paste-clipboard-image model)
+                      (multiple-value-bind (media-type base64) (pasted-image-file text)
+                        (if media-type
+                            (stage-composer-image model media-type base64)
+                            (attach-composer-paste model text)))))
                 (reset-history-navigation model)
                 (setf (chat-model-slash-selection model) 0))))
 
